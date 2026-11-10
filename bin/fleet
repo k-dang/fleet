@@ -1,0 +1,320 @@
+#!/usr/bin/env bash
+# fleet: the lead's mechanics for worker tasks. Every task is a folder under
+# $FLEET_HOME/tasks/<name>/ holding brief.md (the lead's instructions), meta
+# (what this script recorded), and status (lines the worker appends). Workers
+# run in hc terminals detached from the lead, so the lead can die and a new one
+# picks up from these files. Run `fleet help` for commands.
+set -euo pipefail
+
+die() { echo "fleet: $*" >&2; exit 1; }
+
+# Forward-slash paths work in Git Bash, Windows tools, and hc alike.
+mixed() { if command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else printf '%s\n' "$1"; fi; }
+
+FLEET_HOME=$(mixed "${FLEET_HOME:-$HOME/.fleet}")
+TASKS=$FLEET_HOME/tasks
+HC=${FLEET_HC:-$(command -v hc || command -v hc.exe || true)}
+
+need() {
+  [ -n "$HC" ] || die "hc not found; add it to PATH or set FLEET_HC"
+  command -v jq >/dev/null 2>&1 || die "jq not found"
+}
+
+# jq -r without the carriage returns jq.exe adds on Windows.
+jqr() { jq -r "$@" | tr -d '\r'; }
+
+task_dir() {
+  [[ $1 =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]] || die "task name must be kebab-case: $1"
+  printf '%s\n' "$TASKS/$1"
+}
+
+meta_get() { # <name> <key>
+  sed -n "s/^$2=//p" "$TASKS/$1/meta" | tail -n 1
+}
+
+meta_set() { # <name> <key> <value>
+  local file=$TASKS/$1/meta
+  { grep -v "^$2=" "$file" || true; printf '%s=%s\n' "$2" "$3"; } > "$file.tmp"
+  mv "$file.tmp" "$file"
+}
+
+status_lines() { # <name>
+  local file=$TASKS/$1/status
+  if [ -f "$file" ]; then wc -l < "$file" | tr -d ' '; else echo 0; fi
+}
+
+# The worker as one word: starting, working, idle, blocked, error, exited, or
+# gone (no terminal). hc reports a finished turn as "done"; that is idle here,
+# so it never reads as the worker's own done: line. Prints "<word> <turn>".
+worker() { # <name>
+  local json
+  json=$("$HC" get "$1" --json 2>/dev/null) || { echo "gone 0"; return; }
+  printf '%s' "$json" | jqr '
+    (if .state != "live" then "exited"
+     else (.status.state // "starting" | if . == "done" then "idle" else . end)
+     end) + " " + ((.turn // 0) | tostring)'
+}
+
+usage() {
+  cat <<'EOF'
+fleet new <name>                          create a task and print its brief path
+fleet spawn <name> <implement|investigate> <repo>
+                                          start a worker on the filled-in brief
+fleet relaunch <name>                     start a new worker on an existing task
+fleet wait [--timeout SECONDS]            block until a task needs the lead (default 100)
+fleet ack <name>                          mark a task's news as handled
+fleet ls                                  one line per task
+fleet clean <name> [--discard]            stop the worker, remove its worktree and task;
+                                          refuses unlanded work unless --discard
+EOF
+}
+
+cmd_new() {
+  [ $# -eq 1 ] || die "usage: fleet new <name>"
+  local dir; dir=$(task_dir "$1")
+  [ ! -e "$dir" ] || die "task $1 already exists: $dir"
+  mkdir -p "$dir"
+  cat > "$dir/brief.md" <<EOF
+# $1
+
+## Intent
+<The user's words for this task, verbatim. Append later changes here, verbatim.>
+
+## Spec
+<Build instructions: files or areas in scope, and what is out of scope.>
+
+## Done when
+<Checkable conditions: tests that pass, questions answered.>
+EOF
+  echo "$dir/brief.md"
+}
+
+# Start the worker terminal for a task whose meta is already written.
+launch() { # <name> <message>
+  local name=$1 message=$2 role cwd space out
+  role=$(meta_get "$name" role)
+  cwd=$(meta_get "$name" cwd)
+  # Show workers in the lead's Herdr space when the lead runs in one.
+  space=fleet
+  if [ -n "${HC_TERMINAL_ID:-}" ]; then
+    space=$("$HC" get "$HC_TERMINAL_ID" --json 2>/dev/null | jqr '.labels["herdr.space"] // empty' || true)
+    space=${space:-fleet}
+  fi
+  # Detached from the lead: the worker outlives it and hc sends the lead no notes.
+  out=$("$HC" run --bg --json --no-parent --outlive-parent --no-notify \
+    --name "$name" --cwd "$cwd" \
+    --label "herdr.space=$space" --label "herdr.tab=$name" \
+    "$role" "$message") || die "hc run failed: $out"
+  if [ "$(printf '%s' "$out" | jqr '.first_message.sent // false')" = true ]; then
+    echo "started $name ($role) in $cwd"
+  else
+    echo "started $name, but its brief was not delivered."
+    echo "Check its screen with: hc read $name"
+    echo "Once clear, deliver it with: hc send $name \"$message\""
+  fi
+}
+
+cmd_spawn() {
+  [ $# -eq 3 ] || die "usage: fleet spawn <name> <implement|investigate> <repo>"
+  need
+  local name=$1 role=$2 dir repo cwd branch="" base="" report=""
+  dir=$(task_dir "$name")
+  case $role in implement|investigate) ;; *) die "role must be implement or investigate" ;; esac
+  [ -f "$dir/brief.md" ] || die "no brief; run: fleet new $name"
+  [ ! -e "$dir/meta" ] || die "task $name was already spawned; use fleet relaunch $name"
+  ! grep -q '^<.*>$' "$dir/brief.md" || die "brief still has placeholder lines: $dir/brief.md"
+  ! "$HC" get "$name" --json >/dev/null 2>&1 || die "an hc terminal named $name already exists"
+  repo=$(git -C "$3" rev-parse --show-toplevel 2>/dev/null) || die "not a git repo: $3"
+
+  if [ "$role" = implement ]; then
+    if git -C "$repo" remote get-url origin >/dev/null 2>&1; then
+      git -C "$repo" fetch -q origin || die "git fetch origin failed in $repo"
+    fi
+    base=$(git -C "$repo" symbolic-ref -q --short refs/remotes/origin/HEAD \
+      || git -C "$repo" rev-parse --abbrev-ref HEAD)
+    branch=fleet/$name
+    cwd=$FLEET_HOME/worktrees/$(basename "$repo")/$name
+    git -C "$repo" worktree add -q -b "$branch" "$cwd" "$base" || die "git worktree add failed"
+  else
+    cwd=$repo
+    report=$FLEET_HOME/reports/$name.md
+    mkdir -p "$FLEET_HOME/reports"
+  fi
+
+  printf 'role=%s\nrepo=%s\ncwd=%s\nbranch=%s\nbase=%s\nreport=%s\nseen=0\nacked_state=\nacked_turn=0\n' \
+    "$role" "$repo" "$cwd" "$branch" "$base" "$report" > "$dir/meta"
+  : > "$dir/status"
+  {
+    printf '\n## Fleet\n- Role: %s\n- Status file: %s\n' "$role" "$dir/status"
+    if [ "$role" = implement ]; then
+      printf -- '- Worktree: %s (branch %s, based on %s)\n' "$cwd" "$branch" "$base"
+    else
+      printf -- '- Repository (read-only): %s\n- Report file: %s\n' "$cwd" "$report"
+    fi
+  } >> "$dir/brief.md"
+
+  launch "$name" "Your brief is $dir/brief.md. Read it in full, then do the task."
+}
+
+cmd_relaunch() {
+  [ $# -eq 1 ] || die "usage: fleet relaunch <name>"
+  need
+  local name=$1 dir state
+  dir=$(task_dir "$name")
+  [ -f "$dir/meta" ] || die "task $name was never spawned"
+  read -r state _ < <(worker "$name")
+  case $state in
+    gone) ;;
+    exited) "$HC" rm "$name" >/dev/null ;;
+    *) die "worker $name is still running ($state); stop it first with: hc kill $name" ;;
+  esac
+  meta_set "$name" acked_state ""
+  meta_set "$name" acked_turn 0
+  launch "$name" "You are resuming a task an earlier worker started. Your brief is $dir/brief.md. Read it in full, then check what is already done (git status, git log, the Status file) before continuing."
+}
+
+# One line per task that needs the lead, or nothing.
+attention() { # <name>
+  local name=$1 lines seen state turn acked acked_turn last
+  lines=$(status_lines "$name")
+  seen=$(meta_get "$name" seen)
+  if [ "$lines" -gt "${seen:-0}" ]; then
+    echo "$name: new status:"
+    tail -n "+$(( ${seen:-0} + 1 ))" "$TASKS/$name/status" | sed 's/^/  /'
+    return
+  fi
+  read -r state turn < <(worker "$name")
+  acked=$(meta_get "$name" acked_state)
+  acked_turn=$(meta_get "$name" acked_turn)
+  # Forget an acknowledged state once the worker is busy again, so the next
+  # block or stop is news.
+  if [ "$state" = working ] && [ -n "$acked" ]; then meta_set "$name" acked_state ""; return; fi
+  case $state in
+    blocked|error|exited|gone|idle) ;;
+    *) return ;;
+  esac
+  [ "$state" != "$acked" ] || [ "$turn" != "${acked_turn:-0}" ] || return 0
+  # A worker sitting idle or gone after its handled final line is finished, not news.
+  last=$(tail -n 1 "$TASKS/$name/status" 2>/dev/null | cut -d: -f1)
+  case $state:$last in idle:done|idle:failed|exited:done|exited:failed|gone:done|gone:failed) return ;; esac
+  echo "$name: worker $state"
+}
+
+tasks() {
+  local meta
+  for meta in "$TASKS"/*/meta; do
+    [ -f "$meta" ] && basename "$(dirname "$meta")"
+  done
+  return 0
+}
+
+cmd_wait() {
+  local timeout=100
+  if [ "${1:-}" = --timeout ]; then timeout=${2:?}; shift 2; fi
+  [ $# -eq 0 ] || die "usage: fleet wait [--timeout SECONDS]"
+  need
+  local deadline=$(( $(date +%s) + timeout )) news name
+  while :; do
+    news=""
+    for name in $(tasks); do news+="$(attention "$name")"$'\n'; done
+    news=$(printf '%s' "$news" | sed '/^$/d')
+    if [ -n "$news" ]; then printf '%s\n' "$news"; return; fi
+    if [ "$(date +%s)" -ge "$deadline" ]; then
+      [ -n "$(tasks)" ] && echo "timeout: nothing new" || echo "no tasks"
+      return
+    fi
+    sleep 5
+  done
+}
+
+cmd_ack() {
+  [ $# -eq 1 ] || die "usage: fleet ack <name>"
+  need
+  local name=$1 state turn
+  [ -f "$(task_dir "$name")/meta" ] || die "no task $name"
+  read -r state turn < <(worker "$name")
+  meta_set "$name" seen "$(status_lines "$name")"
+  meta_set "$name" acked_state "$( [ "$state" = working ] || echo "$state")"
+  meta_set "$name" acked_turn "$turn"
+}
+
+# The task's pull request as "<STATE> <url> <head sha>", or nothing.
+pr_of() { # <name>
+  local repo branch
+  repo=$(meta_get "$1" repo); branch=$(meta_get "$1" branch)
+  [ -n "$branch" ] || return 0
+  (cd "$repo" && gh pr view "$branch" --json state,url,headRefOid \
+    -q '.state + " " + .url + " " + .headRefOid' 2>/dev/null) || true
+}
+
+cmd_ls() {
+  [ $# -eq 0 ] || die "usage: fleet ls"
+  need
+  local name state turn seen lines last pr
+  echo "tasks in $TASKS"
+  [ -n "$(tasks)" ] || { echo "(none)"; return; }
+  printf '%-24s %-12s %-9s %-4s %s\n' TASK ROLE WORKER NEW "LAST STATUS / PR"
+  for name in $(tasks); do
+    read -r state turn < <(worker "$name")
+    seen=$(meta_get "$name" seen); lines=$(status_lines "$name")
+    last=$(tail -n 1 "$TASKS/$name/status" 2>/dev/null || true)
+    pr=$(pr_of "$name" | cut -d' ' -f1,2)
+    printf '%-24s %-12s %-9s %-4s %s\n' "$name" "$(meta_get "$name" role)" "$state" \
+      "$(( lines - ${seen:-0} ))" "${last:--}${pr:+ | PR $pr}"
+  done
+}
+
+cmd_clean() {
+  local discard=false
+  [ $# -ge 1 ] || die "usage: fleet clean <name> [--discard]"
+  [ "${2:-}" != --discard ] || discard=true
+  need
+  local name=$1 dir role repo cwd branch base report pr head i
+  dir=$(task_dir "$name")
+  [ -f "$dir/meta" ] || die "no task $name"
+  role=$(meta_get "$name" role); repo=$(meta_get "$name" repo)
+  cwd=$(meta_get "$name" cwd); branch=$(meta_get "$name" branch); base=$(meta_get "$name" base)
+
+  # Landed means merged PR containing every local commit, or nothing to land.
+  if [ "$role" = implement ] && [ -d "$cwd" ] && ! $discard; then
+    [ -z "$(git -C "$cwd" status --porcelain)" ] \
+      || die "$name has uncommitted changes in $cwd; not cleaning (--discard drops them)"
+    pr=$(pr_of "$name")
+    head=$(git -C "$cwd" rev-parse HEAD)
+    if [ "${pr%% *}" = MERGED ]; then
+      git -C "$cwd" merge-base --is-ancestor "$head" "${pr##* }" 2>/dev/null \
+        || die "$name has commits that are not in its merged PR; not cleaning (--discard drops them)"
+    elif [ "$(git -C "$cwd" rev-list --count "$base..$head")" != 0 ]; then
+      die "$name has unmerged work${pr:+ (PR ${pr% *})}; not cleaning (--discard drops it)"
+    fi
+  fi
+
+  if "$HC" get "$name" --json >/dev/null 2>&1; then
+    "$HC" kill "$name" >/dev/null 2>&1 || true
+    for i in 1 2 3 4 5; do
+      "$HC" rm "$name" >/dev/null 2>&1 && break
+      sleep 1
+    done
+    ! "$HC" get "$name" --json >/dev/null 2>&1 || die "could not remove hc terminal $name"
+  fi
+  if [ "$role" = implement ]; then
+    [ ! -d "$cwd" ] || git -C "$repo" worktree remove $($discard && echo --force) "$cwd"
+    ! git -C "$repo" rev-parse -q --verify "refs/heads/$branch" >/dev/null \
+      || git -C "$repo" branch -q -D "$branch"
+  fi
+  report=$(meta_get "$name" report)
+  rm -rf "$dir"
+  echo "cleaned $name${report:+; report kept at $report}"
+}
+
+case ${1:-help} in
+  new) shift; cmd_new "$@" ;;
+  spawn) shift; cmd_spawn "$@" ;;
+  relaunch) shift; cmd_relaunch "$@" ;;
+  wait) shift; cmd_wait "$@" ;;
+  ack) shift; cmd_ack "$@" ;;
+  ls) shift; cmd_ls "$@" ;;
+  clean) shift; cmd_clean "$@" ;;
+  help|-h|--help) usage ;;
+  *) usage >&2; exit 1 ;;
+esac
