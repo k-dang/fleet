@@ -1,8 +1,9 @@
 # fleet
 
 A lead agent that runs a fleet of worker agents. You give the lead a request;
-it splits the work into tickets, hands each to a worker, checks the evidence
-that comes back, and reports plain outcomes. Workers make every change.
+it splits the work into tasks, writes each a brief, hands it to a worker,
+checks the evidence that comes back, and reports plain outcomes. Workers make
+every change.
 
 Workers take one of two roles:
 
@@ -20,6 +21,19 @@ terminals, with Claude Code as the agent harness.
   started in this repo. On Windows, clone with Developer Mode on and
   `core.symlinks=true` so the symlink checks out as a link.
 - `herdr-core/templates/`: the worker roles as hc templates.
+- `bin/fleet`: the lead's mechanics (task records, worktrees, worker launch,
+  waiting, cleanup). Bash; on Windows it runs in Git Bash. Needs `hc`, `jq`,
+  `git`, and `gh` on `PATH` (or `FLEET_HC` pointing at `hc`).
+
+## How it holds together
+
+Each task is a folder in `~/.fleet/tasks/<name>/`: the brief the lead wrote,
+fleet's record of the task, and an append-only status file the worker writes
+`done:`, `blocked:`, or `failed:` lines to. Workers run in hc terminals
+detached from the lead, so closing the lead stops nothing: work continues, its
+reports wait in the status files, and the next lead picks them up with
+`bin/fleet ls` and `bin/fleet wait`. `bin/fleet clean` refuses to remove work
+that has not landed.
 
 ## Install
 
@@ -37,10 +51,13 @@ This links `herdr-core/templates/` as hc's templates folder
 
 ## Use
 
-Worktrees and reports live under `~/.fleet`. Trust that folder once in your
-harness (start it there and accept the prompt) so workers launch without a
-trust prompt.
+Tasks, worktrees, and reports live under `~/.fleet`. Trust that folder once
+in your harness (start it there and accept the prompt) so implement workers
+launch without a trust prompt; investigate workers run in the repo itself, so
+trust each repo you investigate too.
 
-Start the lead in this repo, inside an hc terminal so workers can report to
-it: open a terminal in the Herdr Core app, or `hc run claude`. Then run
-`/orchestrate` and make a request.
+Start the lead in this repo and run `/orchestrate`, then make a request.
+Starting it in a Herdr app terminal puts workers in the same space as the lead;
+anywhere else they appear in a `fleet` space. If the lead's session ends,
+start a new one and run `/orchestrate` again: it resumes every task in
+flight.
