@@ -2,6 +2,13 @@
 name: orchestrate
 description: Run project work through hc worker agents while you plan, verify, and report.
 disable-model-invocation: true
+hooks:
+  Stop:
+    - hooks:
+        - type: command
+          command: 'bash "$CLAUDE_PROJECT_DIR/bin/fleet" hook'
+          asyncRewake: true
+          timeout: 28800
 ---
 
 # Orchestrate
@@ -26,8 +33,8 @@ brief, never only in this conversation.
 
 Run `bin/fleet ls`. Tasks listed there are already in flight, possibly started
 by an earlier lead. Do not re-dispatch them; supervise them (step 3), handling
-any news `bin/fleet wait` reports first. Done when every listed task is either
-being supervised or reported to the user.
+any news `bin/fleet wait --timeout 0` reports first. Done when every listed
+task is either being supervised or reported to the user.
 
 ## 1. Intake
 
@@ -64,10 +71,11 @@ brief's Intent, adjust Spec if needed, then
 
 ## 3. Supervise
 
-Loop on `bin/fleet wait`. It blocks up to 100 seconds and prints one entry per
-task that needs you, or `timeout: nothing new`, which is a check-in: answer any
-user message, then wait again. For each entry, handle it, then run
-`bin/fleet ack <name>` so it is not reported again:
+Once tasks are running, end your turn. This skill's Stop hook watches the
+fleet after every turn you end and wakes you with a `Stop hook feedback`
+message listing `fleet news`: one entry per task that needs you. Never loop or
+sleep waiting for workers yourself. Each entry wakes you once. Handle it, then
+run `bin/fleet ack <name>` so `bin/fleet ls` and a later lead see it handled:
 
 - `done:`: verify it (step 4).
 - `blocked: <question>`: answer from the brief or this conversation with

@@ -35,6 +35,11 @@ reports wait in the status files, and the next lead picks them up with
 `bin/fleet ls` and `bin/fleet wait`. `bin/fleet clean` refuses to remove work
 that has not landed.
 
+The lead never waits in a loop. `/orchestrate` registers a Stop hook
+(`bin/fleet hook`, with Claude Code's `asyncRewake`) that watches the status
+files and worker terminals after every turn the lead ends, and wakes the idle
+lead when a task needs it.
+
 ## Install
 
 ```powershell
