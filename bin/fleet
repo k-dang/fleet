@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # fleet: the lead's mechanics for worker tasks. Every task is a folder under
 # $FLEET_HOME/tasks/<name>/ holding brief.md (the lead's instructions), meta
-# (what this script recorded), and status (lines the worker appends). Workers
+# (what this script recorded), status (lines the worker appends), and sent
+# (news the lead's hook delivered and the lead has not acked yet). Workers
 # run in hc terminals detached from the lead, so the lead can die and a new one
 # picks up from these files. Run `fleet help` for commands.
 set -euo pipefail
@@ -63,6 +64,7 @@ fleet spawn <name> <implement|investigate> <repo>
 fleet relaunch <name>                     start a new worker on an existing task
 fleet wait [--timeout SECONDS]            block until a task needs the lead (default 100)
 fleet ack <name>                          mark a task's news as handled
+fleet hook                                the lead's Stop hook; run by Claude Code
 fleet ls                                  one line per task
 fleet clean <name> [--discard]            stop the worker, remove its worktree and task;
                                           refuses unlanded work unless --discard
@@ -208,20 +210,75 @@ tasks() {
   return 0
 }
 
+# Every task's attention lines, or nothing.
+news() {
+  local name out=""
+  for name in $(tasks); do out+="$(attention "$name")"$'\n'; done
+  printf '%s' "$out" | sed '/^$/d'
+}
+
 cmd_wait() {
   local timeout=100
   if [ "${1:-}" = --timeout ]; then timeout=${2:?}; shift 2; fi
   [ $# -eq 0 ] || die "usage: fleet wait [--timeout SECONDS]"
   need
-  local deadline=$(( $(date +%s) + timeout )) news name
+  local deadline=$(( $(date +%s) + timeout )) out
   while :; do
-    news=""
-    for name in $(tasks); do news+="$(attention "$name")"$'\n'; done
-    news=$(printf '%s' "$news" | sed '/^$/d')
-    if [ -n "$news" ]; then printf '%s\n' "$news"; return; fi
+    out=$(news)
+    if [ -n "$out" ]; then printf '%s\n' "$out"; return; fi
     if [ "$(date +%s)" -ge "$deadline" ]; then
       [ -n "$(tasks)" ] && echo "timeout: nothing new" || echo "no tasks"
       return
+    fi
+    sleep 5
+  done
+}
+
+# The lead's watch: an asyncRewake Stop hook the orchestrate skill registers.
+# Claude Code starts one at every turn end of the lead and never cancels the
+# earlier ones, so the newest records its pid and older ones exit. Exit 2 wakes
+# the idle lead with stderr as its message; exit 0 is silent.
+HOOK_PID=$FLEET_HOME/hook.pid
+HOOK_FAILED=$FLEET_HOME/hook.failed
+# Under the hook's 28800-second timeout in SKILL.md: Claude Code drops the
+# wake of a hook it timed out, so the watch ends itself first.
+HOOK_SECONDS=28500
+
+cmd_hook() {
+  [ $# -eq 0 ] || die "usage: fleet hook (run by Claude Code, not by hand)"
+  cat > /dev/null # the hook's JSON payload; unused
+  [ -n "$(tasks)" ] || exit 0
+  local err deadline out name entry sent
+  # Report a broken watch once, not at every turn end.
+  if ! err=$(need 2>&1); then
+    [ ! -e "$HOOK_FAILED" ] || exit 0
+    printf '%s\n' "$err" > "$HOOK_FAILED"
+    echo "fleet: the lead's watch cannot run: $err. Tell the user; until it is fixed, supervise with bin/fleet wait." >&2
+    exit 2
+  fi
+  rm -f "$HOOK_FAILED"
+  echo $$ > "$HOOK_PID"
+  deadline=$(( $(date +%s) + HOOK_SECONDS ))
+  while [ "$(cat "$HOOK_PID" 2>/dev/null)" = $$ ]; do
+    # Each task's entry wakes the lead once; ack clears its sent record so the
+    # task's next news wakes it again.
+    out=""
+    for name in $(tasks); do
+      entry=$(attention "$name"); sent=$TASKS/$name/sent
+      if [ -z "$entry" ]; then
+        rm -f "$sent"
+      elif [ "$entry" != "$(cat "$sent" 2>/dev/null)" ]; then
+        printf '%s\n' "$entry" > "$sent"
+        out+="$entry"$'\n'
+      fi
+    done
+    if [ -n "$out" ]; then
+      printf 'fleet news:\n%sHandle each entry, then bin/fleet ack <name>.\n' "$out" >&2
+      exit 2
+    fi
+    if [ "$(date +%s)" -ge "$deadline" ]; then
+      echo "fleet: nothing new for $(( HOOK_SECONDS / 3600 )) hours; the watch restarts when this turn ends." >&2
+      exit 2
     fi
     sleep 5
   done
@@ -236,6 +293,7 @@ cmd_ack() {
   meta_set "$name" seen "$(status_lines "$name")"
   meta_set "$name" acked_state "$( [ "$state" = working ] || echo "$state")"
   meta_set "$name" acked_turn "$turn"
+  rm -f "$TASKS/$name/sent"
 }
 
 # The task's pull request as "<STATE> <url> <head sha>", or nothing.
@@ -312,6 +370,7 @@ case ${1:-help} in
   spawn) shift; cmd_spawn "$@" ;;
   relaunch) shift; cmd_relaunch "$@" ;;
   wait) shift; cmd_wait "$@" ;;
+  hook) shift; cmd_hook "$@" ;;
   ack) shift; cmd_ack "$@" ;;
   ls) shift; cmd_ls "$@" ;;
   clean) shift; cmd_clean "$@" ;;
