@@ -20,6 +20,8 @@ terminals, with Claude Code as the agent harness.
   Code finds it too. It is project-local, so it is available only to a lead
   started in this repo. On Windows, clone with Developer Mode on and
   `core.symlinks=true` so the symlink checks out as a link.
+- `.agents/skills/digest/`: `/digest`, a catch-up on every task by project
+  (`bin/fleet digest`). Linked into `.claude/skills/` the same way.
 - `herdr-core/templates/`: the worker roles as hc templates.
 - `bin/fleet`: the lead's mechanics (task records, worktrees, worker launch,
   waiting, cleanup). Bash; on Windows it runs in Git Bash. Needs `hc`, `jq`,
@@ -32,8 +34,11 @@ fleet's record of the task, and an append-only status file the worker writes
 `done:`, `blocked:`, or `failed:` lines to. Workers run in hc terminals
 detached from the lead, so closing the lead stops nothing: work continues, its
 reports wait in the status files, and the next lead picks them up with
-`bin/fleet ls` and `bin/fleet wait`. `bin/fleet clean` refuses to remove work
-that has not landed.
+`bin/fleet ls` and `bin/fleet wait`. `bin/fleet digest` says where every task
+stands, grouped by project: what needs you, what is underway, what is
+finished, and what recently landed (`bin/fleet clean` logs each delivered task
+to `~/.fleet/landed` before removing it). `bin/fleet clean` refuses to remove
+work that has not landed.
 
 The lead never waits in a loop. `/orchestrate` registers a Stop hook
 (`bin/fleet hook`, with Claude Code's `asyncRewake`) that watches the status

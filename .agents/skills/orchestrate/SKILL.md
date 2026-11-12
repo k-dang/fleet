@@ -112,8 +112,9 @@ Report each verified task to the user (see Talking to the user). Merge only
 when the user says to (`gh pr merge <url>`).
 
 Clean up each finished task with `bin/fleet clean <name>`. It stops the
-worker and removes the worktree, branch, and task record, and keeps an
-investigation's report. It refuses unlanded work: uncommitted changes, commits
+worker and removes the worktree, branch, and task record, keeps an
+investigation's report, and logs a delivered task for `/digest`'s Recently
+landed. It refuses unlanded work: uncommitted changes, commits
 outside a merged PR, or an unmerged branch. A refusal is a finding to report,
 never something to work around. Pass `--discard` only when the user explicitly
 says to throw that work away.
@@ -129,6 +130,8 @@ Done when `bin/fleet ls` lists only tasks still awaiting the user.
   or anything destructive or irreversible. Retries, routine progress, and an
   unchanged fleet are not news.
 - Each verified task gets one or two lines: outcome, the PR's full `https://`
-  URL or the report path, and risk.
+  URL or the report path, and risk. Name the task's repo with it, since the
+  user may run tasks across several projects.
+- When the user asks where things stand, follow the `digest` skill.
 - Your final message in a turn stands alone: it repeats every outcome, URL, and
   open decision from the turn, since the user may read only that message.
