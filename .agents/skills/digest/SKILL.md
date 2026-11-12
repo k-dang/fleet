@@ -5,8 +5,9 @@ description: Report where every fleet task stands, by project. Use when the user
 
 # Digest
 
-Run `bin/fleet digest` (from this repo) and relay its three sections to the
-user in this order: **Needs you**, **Underway**, **Finished**.
+Run `bin/fleet digest` (from this repo) and relay its four sections to the
+user in this order: **Needs you**, **Underway**, **Finished** (done, not yet
+cleaned up), **Recently landed** (cleaned up, newest first).
 
 - Keep each row's project (`<repo>/<task>`) and every full `https://` URL and
   report path.

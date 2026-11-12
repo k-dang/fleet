@@ -35,8 +35,10 @@ fleet's record of the task, and an append-only status file the worker writes
 detached from the lead, so closing the lead stops nothing: work continues, its
 reports wait in the status files, and the next lead picks them up with
 `bin/fleet ls` and `bin/fleet wait`. `bin/fleet digest` says where every task
-stands, grouped by project: what needs you, what is underway, and what is
-finished. `bin/fleet clean` refuses to remove work that has not landed.
+stands, grouped by project: what needs you, what is underway, what is
+finished, and what recently landed (`bin/fleet clean` logs each delivered task
+to `~/.fleet/landed` before removing it). `bin/fleet clean` refuses to remove
+work that has not landed.
 
 The lead never waits in a loop. `/orchestrate` registers a Stop hook
 (`bin/fleet hook`, with Claude Code's `asyncRewake`) that watches the status

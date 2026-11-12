@@ -67,9 +67,10 @@ fleet ack <name>                          mark a task's news as handled
 fleet hook                                the lead's Stop hook; run by Claude Code
 fleet ls                                  one line per task, with its repo
 fleet digest                              where things stand, by project: needs you,
-                                          underway, finished
-fleet clean <name> [--discard]            stop the worker, remove its worktree and task;
-                                          refuses unlanded work unless --discard
+                                          underway, finished, recently landed
+fleet clean <name> [--discard]            stop the worker, remove its worktree and task,
+                                          and log what it delivered; refuses unlanded
+                                          work unless --discard
 EOF
 }
 
@@ -325,18 +326,41 @@ cmd_ls() {
   done
 }
 
+# What a finished task delivered, as "<repo>/<task>: <delivery>", or nothing:
+# a merged PR, or an investigation's answer and report. Pass the task's
+# pr_of line when it is already known, to skip looking it up again.
+landed_row() { # <name> [<pr_of line>]
+  local name=$1 last rest pr url delivery=""
+  last=$(tail -n 1 "$TASKS/$name/status" 2>/dev/null || true)
+  [ "${last%%:*}" = done ] || return 0
+  rest=${last#*: }
+  if [ "$(meta_get "$name" role)" = investigate ]; then
+    delivery="${rest#* } (report ${rest%% *})"
+  else
+    read -r pr url _ <<< "${2:-$(pr_of "$name")}"
+    [ "$pr" != MERGED ] || delivery="merged $url"
+  fi
+  [ -z "$delivery" ] || printf '%s/%s: %s\n' "$(basename "$(meta_get "$name" repo)")" "$name" "$delivery"
+}
+
+# Every clean of a delivered task appends its landed_row here, dated, so the
+# digest can show what landed after the task's record is gone.
+LANDED=$FLEET_HOME/landed
+LANDED_SHOWN=6
+
 digest_section() { # <title> <rows>
   echo "$1"
-  if [ -n "$2" ]; then printf '%s' "$2" | sort | sed 's/^/  /'; else echo "  (none)"; fi
+  if [ -n "$2" ]; then printf '%s\n' "$2" | sed 's/^/  /'; else echo "  (none)"; fi
 }
 
 # Where every task stands, for the user: what needs them, what is still
-# running, and what is finished and ready to clean. Rows are <repo>/<task>,
-# sorted so each project's tasks sit together within a section.
+# running, what is finished and ready to clean, and what recently landed and
+# was cleaned. Rows are <repo>/<task>, sorted so each project's tasks sit
+# together; recently landed is newest first.
 cmd_digest() {
   [ $# -eq 0 ] || die "usage: fleet digest"
   need
-  local name repo state turn last rest summary pr url row needs="" underway="" finished=""
+  local name repo state turn last rest summary prline pr url row needs="" underway="" finished=""
   for name in $(tasks); do
     repo=$(basename "$(meta_get "$name" repo)")
     read -r state turn < <(worker "$name")
@@ -354,11 +378,12 @@ cmd_digest() {
       failed) needs+="$row failed: $rest"$'\n' ;;
       done)
         if [ "$(meta_get "$name" role)" = investigate ]; then
-          finished+="$row $summary (report ${rest%% *})"$'\n'
+          finished+="$(landed_row "$name")"$'\n'
         else
-          read -r pr url _ <<< "$(pr_of "$name")"
+          prline=$(pr_of "$name")
+          read -r pr url _ <<< "$prline"
           case $pr in
-            MERGED) finished+="$row merged $url"$'\n' ;;
+            MERGED) finished+="$(landed_row "$name" "$prline")"$'\n' ;;
             OPEN) needs+="$row PR to review: $url $summary"$'\n' ;;
             *) needs+="$row done, but its PR is ${pr:-missing}${url:+ ($url)}"$'\n' ;;
           esac
@@ -368,9 +393,11 @@ cmd_digest() {
         else underway+="$row stalled: worker $state before reporting"$'\n'; fi ;;
     esac
   done
-  digest_section "Needs you" "$needs"
-  digest_section "Underway" "$underway"
-  digest_section "Finished" "$finished"
+  digest_section "Needs you" "$(printf '%s' "$needs" | sort)"
+  digest_section "Underway" "$(printf '%s' "$underway" | sort)"
+  digest_section "Finished" "$(printf '%s' "$finished" | sort)"
+  digest_section "Recently landed" \
+    "$(tail -n "$LANDED_SHOWN" "$LANDED" 2>/dev/null | awk '{ l[NR] = $0 } END { for (i = NR; i > 0; i--) print l[i] }')"
 }
 
 cmd_clean() {
@@ -378,7 +405,7 @@ cmd_clean() {
   [ $# -ge 1 ] || die "usage: fleet clean <name> [--discard]"
   [ "${2:-}" != --discard ] || discard=true
   need
-  local name=$1 dir role repo cwd branch base report pr head i
+  local name=$1 dir role repo cwd branch base report pr="" head i row
   dir=$(task_dir "$name")
   [ -f "$dir/meta" ] || die "no task $name"
   role=$(meta_get "$name" role); repo=$(meta_get "$name" repo)
@@ -412,6 +439,10 @@ cmd_clean() {
       || git -C "$repo" branch -q -D "$branch"
   fi
   report=$(meta_get "$name" report)
+  if ! $discard; then
+    row=$(landed_row "$name" "$pr")
+    [ -z "$row" ] || printf '%s %s\n' "$(date +%F)" "$row" >> "$LANDED"
+  fi
   rm -rf "$dir"
   echo "cleaned $name${report:+; report kept at $report}"
 }
