@@ -401,11 +401,16 @@ cmd_digest() {
 }
 
 cmd_clean() {
-  local discard=false
-  [ $# -ge 1 ] || die "usage: fleet clean <name> [--discard]"
-  [ "${2:-}" != --discard ] || discard=true
+  local discard=false name="" arg
+  for arg in "$@"; do
+    if [ "$arg" = --discard ]; then discard=true
+    elif [ -z "$name" ]; then name=$arg
+    else die "usage: fleet clean <name> [--discard]"
+    fi
+  done
+  [ -n "$name" ] || die "usage: fleet clean <name> [--discard]"
   need
-  local name=$1 dir role repo cwd branch base report pr="" head i row
+  local dir role repo cwd branch base report pr="" head merged i row
   dir=$(task_dir "$name")
   [ -f "$dir/meta" ] || die "no task $name"
   role=$(meta_get "$name" role); repo=$(meta_get "$name" repo)
@@ -418,7 +423,12 @@ cmd_clean() {
     pr=$(pr_of "$name")
     head=$(git -C "$cwd" rev-parse HEAD)
     if [ "${pr%% *}" = MERGED ]; then
-      git -C "$cwd" merge-base --is-ancestor "$head" "${pr##* }" 2>/dev/null \
+      # The PR head may exist only on GitHub (e.g. "Update branch" merged the
+      # base into it), so fetch it before asking whether it contains HEAD.
+      merged=${pr##* }
+      git -C "$cwd" cat-file -e "$merged^{commit}" 2>/dev/null \
+        || git -C "$cwd" fetch -q origin "$merged" 2>/dev/null || true
+      git -C "$cwd" merge-base --is-ancestor "$head" "$merged" 2>/dev/null \
         || die "$name has commits that are not in its merged PR; not cleaning (--discard drops them)"
     elif [ "$(git -C "$cwd" rev-list --count "$base..$head")" != 0 ]; then
       die "$name has unmerged work${pr:+ (PR ${pr% *})}; not cleaning (--discard drops it)"
