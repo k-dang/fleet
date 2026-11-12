@@ -129,6 +129,8 @@ Done when `bin/fleet ls` lists only tasks still awaiting the user.
   or anything destructive or irreversible. Retries, routine progress, and an
   unchanged fleet are not news.
 - Each verified task gets one or two lines: outcome, the PR's full `https://`
-  URL or the report path, and risk.
+  URL or the report path, and risk. Name the task's repo with it, since the
+  user may run tasks across several projects.
+- When the user asks where things stand, follow the `digest` skill.
 - Your final message in a turn stands alone: it repeats every outcome, URL, and
   open decision from the turn, since the user may read only that message.

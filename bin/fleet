@@ -65,7 +65,9 @@ fleet relaunch <name>                     start a new worker on an existing task
 fleet wait [--timeout SECONDS]            block until a task needs the lead (default 100)
 fleet ack <name>                          mark a task's news as handled
 fleet hook                                the lead's Stop hook; run by Claude Code
-fleet ls                                  one line per task
+fleet ls                                  one line per task, with its repo
+fleet digest                              where things stand, by project: needs you,
+                                          underway, finished
 fleet clean <name> [--discard]            stop the worker, remove its worktree and task;
                                           refuses unlanded work unless --discard
 EOF
@@ -311,15 +313,64 @@ cmd_ls() {
   local name state turn seen lines last pr
   echo "tasks in $TASKS"
   [ -n "$(tasks)" ] || { echo "(none)"; return; }
-  printf '%-24s %-12s %-9s %-4s %s\n' TASK ROLE WORKER NEW "LAST STATUS / PR"
+  printf '%-24s %-16s %-12s %-9s %-4s %s\n' TASK REPO ROLE WORKER NEW "LAST STATUS / PR"
   for name in $(tasks); do
     read -r state turn < <(worker "$name")
     seen=$(meta_get "$name" seen); lines=$(status_lines "$name")
     last=$(tail -n 1 "$TASKS/$name/status" 2>/dev/null || true)
     pr=$(pr_of "$name" | cut -d' ' -f1,2)
-    printf '%-24s %-12s %-9s %-4s %s\n' "$name" "$(meta_get "$name" role)" "$state" \
+    printf '%-24s %-16s %-12s %-9s %-4s %s\n' "$name" "$(basename "$(meta_get "$name" repo)")" \
+      "$(meta_get "$name" role)" "$state" \
       "$(( lines - ${seen:-0} ))" "${last:--}${pr:+ | PR $pr}"
   done
+}
+
+digest_section() { # <title> <rows>
+  echo "$1"
+  if [ -n "$2" ]; then printf '%s' "$2" | sort | sed 's/^/  /'; else echo "  (none)"; fi
+}
+
+# Where every task stands, for the user: what needs them, what is still
+# running, and what is finished and ready to clean. Rows are <repo>/<task>,
+# sorted so each project's tasks sit together within a section.
+cmd_digest() {
+  [ $# -eq 0 ] || die "usage: fleet digest"
+  need
+  local name repo state turn last rest summary pr url row needs="" underway="" finished=""
+  for name in $(tasks); do
+    repo=$(basename "$(meta_get "$name" repo)")
+    read -r state turn < <(worker "$name")
+    last=$(tail -n 1 "$TASKS/$name/status" 2>/dev/null || true)
+    rest=${last#*: }; summary=${rest#* }
+    row="$repo/$name:"
+    # A busy worker is underway whatever it last reported: the lead has
+    # answered its question or sent it back for more.
+    if [ "$state" = working ] || [ "$state" = starting ]; then
+      underway+="$row $state"$'\n'
+      continue
+    fi
+    case ${last%%:*} in
+      blocked) needs+="$row asks: $rest"$'\n' ;;
+      failed) needs+="$row failed: $rest"$'\n' ;;
+      done)
+        if [ "$(meta_get "$name" role)" = investigate ]; then
+          finished+="$row $summary (report ${rest%% *})"$'\n'
+        else
+          read -r pr url _ <<< "$(pr_of "$name")"
+          case $pr in
+            MERGED) finished+="$row merged $url"$'\n' ;;
+            OPEN) needs+="$row PR to review: $url $summary"$'\n' ;;
+            *) needs+="$row done, but its PR is ${pr:-missing}${url:+ ($url)}"$'\n' ;;
+          esac
+        fi ;;
+      *)
+        if [ "$state" = blocked ]; then needs+="$row worker is waiting on a prompt"$'\n'
+        else underway+="$row stalled: worker $state before reporting"$'\n'; fi ;;
+    esac
+  done
+  digest_section "Needs you" "$needs"
+  digest_section "Underway" "$underway"
+  digest_section "Finished" "$finished"
 }
 
 cmd_clean() {
@@ -373,6 +424,7 @@ case ${1:-help} in
   hook) shift; cmd_hook "$@" ;;
   ack) shift; cmd_ack "$@" ;;
   ls) shift; cmd_ls "$@" ;;
+  digest) shift; cmd_digest "$@" ;;
   clean) shift; cmd_clean "$@" ;;
   help|-h|--help) usage ;;
   *) usage >&2; exit 1 ;;
