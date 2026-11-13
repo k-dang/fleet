@@ -134,7 +134,7 @@ task_repo() { # <project> [<repo>]
   local project=$1 want=${2:-} repos root match
   repos=$(need_project "$project")
   if [ -z "$want" ]; then
-    [ "$(printf '%s\n' "$repos" | wc -l)" -eq 1 ] \
+    [[ $repos != *$'\n'* ]] \
       || die "project $project has several repos; name one of: $(printf '%s\n' "$repos" | xargs)"
     printf '%s\n' "$repos"
     return
@@ -143,7 +143,7 @@ task_repo() { # <project> [<repo>]
   match=$(printf '%s\n' "$repos" | awk -v w="${want%/}" -v r="$root" '
     { n = split($0, p, "/") } $0 == r || p[n] == w')
   [ -n "$match" ] || die "$want is not one of project $project's repos: $(printf '%s\n' "$repos" | xargs)"
-  [ "$(printf '%s\n' "$match" | wc -l)" -eq 1 ] || die "$want names several of project $project's repos; give its path"
+  [[ $match != *$'\n'* ]] || die "$want names several of project $project's repos; give its path"
   printf '%s\n' "$match"
 }
 
