@@ -107,7 +107,6 @@ fleet clean <name> [--discard]            stop the agent, remove its worktree an
 EOF
 }
 
-# --- projects -------------------------------------------------------------
 
 project_repo() { # <name>: its repo, or nothing
   [ ! -f "$PROJECTS" ] || awk -F'\t' -v n="$1" '$1 == n { print $2; exit }' "$PROJECTS"
@@ -141,7 +140,6 @@ cmd_project() {
   esac
 }
 
-# --- sessions and project leads ------------------------------------------
 
 # The project this session leads, or nothing for the orchestrator.
 scope() {
@@ -229,7 +227,6 @@ tell_orchestrator() { # <project> <line>
   printf '%s\n' "$2" >> "$TASKS/lead-$1/status"
 }
 
-# --- tasks ----------------------------------------------------------------
 
 cmd_new() {
   [ $# -eq 1 ] || die "usage: fleet new <name>"
@@ -277,7 +274,7 @@ launch() { # <name> [<message>]
     --name "$name" --cwd "$cwd" \
     --label "herdr.space=$space" --label "herdr.tab=$name" \
     "${agent[@]}") || die "hc run failed: $out"
-  # A project lead's command is a launch argument, so only a template's first message can go undelivered.
+  # Only a template's first message can go undelivered; a lead's is an argument.
   if [ "$role" = lead ] || [ "$(printf '%s' "$out" | jqr '.first_message.sent // false')" = true ]; then
     echo "started $name ($role) in $cwd"
   else
@@ -350,12 +347,9 @@ cmd_relaunch() {
   launch "$name" "You are resuming a task an earlier worker started. Your brief is $dir/brief.md. Read it in full, then check what is already done (git status, git log, the Status file) before continuing."
 }
 
-# --- news -----------------------------------------------------------------
 
 # A worker task's outcome for the orchestrator, or nothing: what its latest
-# line delivered, or a permission prompt its project lead has seen. Acking a
-# worker passes this up, so no outcome depends on a project lead remembering
-# to report it.
+# line delivered, or a permission prompt its project lead has seen.
 outcome() { # <name>
   local name=$1 last rest state
   last=$(last_status "$name")
@@ -508,7 +502,6 @@ cmd_ack() {
   meta_set "$name" passed "$row"
 }
 
-# --- views ----------------------------------------------------------------
 
 # The task's pull request as "<STATE> <url> <head sha>", or nothing.
 pr_of() { # <name>
