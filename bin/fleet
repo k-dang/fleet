@@ -18,7 +18,9 @@ mixed() { if command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else prin
 
 FLEET_HOME=$(mixed "${FLEET_HOME:-$HOME/.fleet}")
 TASKS=$FLEET_HOME/tasks
-# The project registry: one "<name><TAB><repo><TAB><description>" line each.
+# The project registry: one "<name><TAB><repo><TAB><description>" line per repo
+# a project holds; its first line carries its description. A repo can belong to
+# several projects.
 PROJECTS=$FLEET_HOME/projects
 # One folder per session, named by its Claude Code session id: the project it
 # leads (absent for the orchestrator) and its hook's pid.
@@ -83,16 +85,19 @@ worker() { # <name>
 
 usage() {
   cat <<'EOF'
-fleet project add <name> <repo> <description>
-                                          register a project
+fleet project add <name> <repo> [<description>]
+                                          register a project (description required),
+                                          or add a repo to a registered one
 fleet project ls                          list registered projects
 fleet scope [<project>]                   make this session the project's lead, or
                                           say which role this session has
 fleet lead <project>                      start the project's lead (orchestrator only)
 fleet report <text>                       pass a report to the orchestrator (project lead only)
 fleet new <name>                          create a task and print its brief path
-fleet spawn <name> <implement|investigate> <project>
-                                          start a worker on the filled-in brief
+fleet spawn <name> <implement|investigate> <project> [<repo>]
+                                          start a worker on the filled-in brief in one
+                                          of the project's repos, by path or folder
+                                          name; required when it has several
                                           (that project's lead only)
 fleet relaunch <name>                     start a new agent on an existing task
 fleet wait [--timeout SECONDS]            block until a task needs this session (default 100)
@@ -108,35 +113,65 @@ EOF
 }
 
 
-project_repo() { # <name>: its repo, or nothing
-  [ ! -f "$PROJECTS" ] || awk -F'\t' -v n="$1" '$1 == n { print $2; exit }' "$PROJECTS"
+project_repos() { # <name>: its repos, one per line, or nothing
+  [ ! -f "$PROJECTS" ] || awk -F'\t' -v n="$1" '$1 == n { print $2 }' "$PROJECTS"
 }
 
-need_project() { # <name>: its repo, or die
-  local repo; repo=$(project_repo "$1")
-  [ -n "$repo" ] || die "no project $1; see fleet project ls"
-  printf '%s\n' "$repo"
+need_project() { # <name>: its repos, or die
+  local repos; repos=$(project_repos "$1")
+  [ -n "$repos" ] || die "no project $1; see fleet project ls"
+  printf '%s\n' "$repos"
+}
+
+git_root() { # <dir>: the repo holding it, or fail
+  local root; root=$(git -C "$1" rev-parse --show-toplevel 2>/dev/null) || return 1
+  mixed "$root"
+}
+
+# The project's repo a task uses: the one named by path or folder name, or the
+# project's only repo when none is named.
+task_repo() { # <project> [<repo>]
+  local project=$1 want=${2:-} repos root match
+  repos=$(need_project "$project")
+  if [ -z "$want" ]; then
+    [[ $repos != *$'\n'* ]] \
+      || die "project $project has several repos; name one of: $(printf '%s\n' "$repos" | xargs)"
+    printf '%s\n' "$repos"
+    return
+  fi
+  root=$(git_root "$want" || true)
+  match=$(printf '%s\n' "$repos" | awk -v w="${want%/}" -v r="$root" '
+    { n = split($0, p, "/") } $0 == r || p[n] == w')
+  [ -n "$match" ] || die "$want is not one of project $project's repos: $(printf '%s\n' "$repos" | xargs)"
+  [[ $match != *$'\n'* ]] || die "$want names several of project $project's repos; give its path"
+  printf '%s\n' "$match"
 }
 
 cmd_project() {
   case ${1:-} in
     add)
-      [ $# -ge 4 ] || die "usage: fleet project add <name> <repo> <description>"
-      local name=$2 repo taken=""
+      [ $# -ge 3 ] || die "usage: fleet project add <name> <repo> [<description>]"
+      local name=$2 repo repos description=${*:4}
       kebab project "$name"
-      [ -z "$(project_repo "$name")" ] || die "project $name is already registered"
-      repo=$(git -C "$3" rev-parse --show-toplevel 2>/dev/null) || die "not a git repo: $3"
-      [ ! -f "$PROJECTS" ] || taken=$(awk -F'\t' -v r="$repo" '$2 == r { print $1; exit }' "$PROJECTS")
-      [ -z "$taken" ] || die "$repo is already registered as $taken"
+      repo=$(git_root "$3") || die "not a git repo: $3"
+      repos=$(project_repos "$name")
+      if [ -z "$repos" ]; then
+        [ -n "$description" ] || die "a new project needs a description: fleet project add $name $3 <description>"
+      else
+        [ -z "$description" ] || die "project $name is already registered; add a repo to it with: fleet project add $name <repo>"
+        ! printf '%s\n' "$repos" | grep -qxF -- "$repo" || die "$repo is already in project $name"
+      fi
       mkdir -p "$FLEET_HOME"
-      printf '%s\t%s\t%s\n' "$name" "$repo" "${*:4}" >> "$PROJECTS"
-      echo "registered $name ($repo)"
+      printf '%s\t%s\t%s\n' "$name" "$repo" "$description" >> "$PROJECTS"
+      if [ -z "$repos" ]; then echo "registered $name ($repo)"; else echo "added $repo to $name"; fi
       ;;
     ls)
       [ -s "$PROJECTS" ] || { echo "(no projects; add one with fleet project add)"; return; }
-      awk -F'\t' '{ printf "%-20s %s\n%-20s %s\n", $1, $3, "", $2 }' "$PROJECTS"
+      awk -F'\t' '!seen[$1]++ { order[++n] = $1; desc[$1] = $3 }
+        { repos[$1] = repos[$1] sprintf("%-20s %s\n", "", $2) }
+        END { for (i = 1; i <= n; i++) printf "%-20s %s\n%s", order[i], desc[order[i]], repos[order[i]] }' "$PROJECTS"
       ;;
-    *) die "usage: fleet project add <name> <repo> <description> | fleet project ls" ;;
+    *) die "usage: fleet project add <name> <repo> [<description>] | fleet project ls" ;;
   esac
 }
 
@@ -158,12 +193,13 @@ tasks() {
 tasks_with() { # <meta line>...
   local -a metas=("$TASKS"/*/meta)
   [ -f "${metas[0]}" ] || return 0
-  local line
+  local line meta found
   for line in "$@"; do
-    mapfile -t metas < <(grep -lx -- "$line" "${metas[@]}" || true)
-    [ ${#metas[@]} -gt 0 ] || return 0
+    found=$(grep -lx -- "$line" "${metas[@]}" || true)
+    [ -n "$found" ] || return 0
+    metas=()
+    while IFS= read -r meta; do metas+=("$meta"); done <<< "$found"
   done
-  local meta
   for meta in "${metas[@]}"; do basename "$(dirname "$meta")"; done
 }
 
@@ -189,12 +225,14 @@ cmd_scope() {
     return
   fi
   project=$1
-  need_project "$project" >/dev/null
+  local repos; repos=$(need_project "$project")
   [ -f "$TASKS/lead-$project/meta" ] \
     || die "project leads are started by the orchestrator, with: fleet lead $project"
   mkdir -p "$SESSIONS/$SESSION"
   printf '%s\n' "$project" > "$SESSIONS/$SESSION/project"
   echo "this session leads project $project; reach the orchestrator with fleet report"
+  echo "its repos:"
+  printf '%s\n' "$repos" | sed 's/^/  /'
 }
 
 cmd_lead() {
@@ -285,12 +323,12 @@ launch() { # <name> [<message>]
 }
 
 cmd_spawn() {
-  [ $# -eq 3 ] || die "usage: fleet spawn <name> <implement|investigate> <project>"
+  [ $# -eq 3 ] || [ $# -eq 4 ] || die "usage: fleet spawn <name> <implement|investigate> <project> [<repo>]"
   need
   local name=$1 role=$2 project=$3 dir repo cwd branch="" base="" report=""
   dir=$(task_dir "$name")
   case $role in implement|investigate) ;; *) die "role must be implement or investigate" ;; esac
-  repo=$(need_project "$project")
+  repo=$(task_repo "$project" "${4:-}")
   [ "$(scope)" = "$project" ] || die "workers for $project are started by its project lead"
   [ -f "$dir/brief.md" ] || die "no brief; run: fleet new $name"
   [ ! -e "$dir/meta" ] || die "task $name was already spawned; use fleet relaunch $name"
