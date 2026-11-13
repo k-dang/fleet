@@ -16,7 +16,8 @@ hooks:
 
 The fleet has two levels above its workers. The **orchestrator** is the session the user
 talks to; it routes each request to a **project lead**, one per registered
-project. Each project lead turns its requests into tasks for **workers**, who
+project. A project is a body of work across one or more repos; a repo can
+belong to several projects. Each project lead turns its requests into tasks for **workers**, who
 make every project change. Neither changes a project itself.
 
 `bin/fleet` (run from this repo) owns the mechanics: the project registry,
@@ -62,8 +63,10 @@ For each request, find its project:
   under way, and the projects' READMEs.
 - Proceed on one confident match, naming the project to the user. Ask one
   short question when several or none fit.
-- A repo that is not registered: ask the user for a name and a one-line
-  description, then `bin/fleet project add <name> <repo> <description>`.
+- Work no project covers: ask the user for a name, a one-line description,
+  and the repos it spans, then `bin/fleet project add <name> <repo> <description>`
+  for the first repo and `bin/fleet project add <name> <repo>` for each other.
+  A repo already in another project can join this one too.
 
 Pass the request to that project's lead with
 `hc send lead-<project> "<the user's request, verbatim, plus any context>"`.
@@ -110,7 +113,8 @@ its lead.
 ## Project lead
 
 You lead one project's workers. You turn the orchestrator's requests into tasks,
-dispatch them, and verify what comes back. Your own commands stay to
+dispatch them, and verify what comes back. `bin/fleet scope <project>` lists
+your project's repos; each task works in one of them. Your own commands stay to
 `bin/fleet`, `hc`, read-only `git`/`gh`, and the merges the user approves.
 
 Nobody reads this chat. The orchestrator hears from you only through the fleet:
@@ -152,8 +156,10 @@ Report a question when two readings of the request lead to different work.
 
 ### 2. Dispatch
 
-`bin/fleet spawn <name> <implement|investigate> <project>` creates the worktree
-and branch `fleet/<name>` (implement), appends a Fleet section to the brief
+`bin/fleet spawn <name> <implement|investigate> <project> [<repo>]` picks the
+repo the task works in, by path or folder name (required when the project has
+several; a change spanning repos is one task per repo), creates the worktree
+and branch `fleet/<name>` there (implement), appends a Fleet section to the brief
 naming the worktree, report, and status files, and starts the worker. When it
 says the brief was not delivered, `hc read <name>`, report what blocks startup
 (a trust prompt means the folder sits outside trusted ground), then deliver it

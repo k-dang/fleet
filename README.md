@@ -32,8 +32,11 @@ terminals, with Claude Code as the agent harness.
 
 ## How it holds together
 
-Projects are registered by name in `~/.fleet/projects`, each a repo with a
-one-line description the orchestrator routes requests by.
+A project is a body of work, not a repo. Projects are registered by name in
+`~/.fleet/projects`, each with a one-line description the orchestrator routes
+requests by and one or more repos the work spans. A repo can belong to several
+projects. Each task runs in one of its project's repos, named when it is
+spawned if the project has several, and fleet records which.
 
 Each task is a folder in `~/.fleet/tasks/<name>/`: the brief its project lead wrote,
 fleet's record of the task, and an append-only status file the worker writes
@@ -83,8 +86,8 @@ launch without a trust prompt; investigate workers run in the repo itself, so
 trust each repo you investigate too.
 
 Start a session in this repo, run `/orchestrate`, and make requests. Name the
-project or let the orchestrator work it out; it registers a repo it has not seen
-with your name and description for it, starts that project's lead, and
+project or let the orchestrator work it out; it registers new work as a project
+with your name and description for it, across whichever repos it spans, starts that project's lead, and
 reports outcomes from every project in this one conversation. Each project
 lead runs in its own hc terminal, where you can watch it or type to it.
 
