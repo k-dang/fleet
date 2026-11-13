@@ -38,16 +38,16 @@ one-line description the orchestrator routes requests by.
 Each task is a folder in `~/.fleet/tasks/<name>/`: the brief its project lead wrote,
 fleet's record of the task, and an append-only status file the worker writes
 `done:`, `blocked:`, or `failed:` lines to. A project lead is a task too,
-`lead-<project>`, whose status file holds its reports to the orchestrator. Every
+`lead-<project>`, whose status file is what the orchestrator hears. Every
 agent runs in an hc terminal detached from whoever started it, so closing any
 session stops nothing: work continues, its reports wait in the status files, and
 its replacement picks them up with `bin/fleet ls` and `bin/fleet wait`.
 
 Nothing a worker delivers depends on a project lead remembering to report it.
 Once the project lead has handled a task's latest line (verified a PR, read a
-report, given up on a failure), fleet passes that outcome to the orchestrator
-itself. The project lead adds its own judgement, such as questions only the
-user can answer, with `bin/fleet report`.
+report, given up on a failure) and acked it, fleet appends that outcome to the
+project lead's status file itself. The project lead adds its own judgement,
+such as questions only the user can answer, with `bin/fleet report`.
 
 `bin/fleet digest` says where every task stands, grouped by project: what
 needs you, what is underway, what is finished, and what recently landed

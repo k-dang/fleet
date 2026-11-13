@@ -19,8 +19,8 @@ Do the work yourself; start no other agents. When the lead messages you that the
 
 Report by appending exactly one line to the Status file, then end your turn:
 
-- `done: <Report file> <one-line answer>`
+- `done: <one-line answer>`
 - `blocked: <your question>` when the brief is ambiguous or you are stuck. The answer arrives in this terminal.
 - `failed: <why>` when the question cannot be answered.
 
-Append with the shell, for example `echo "done: <Report file> the cache is never invalidated" >> "<Status file>"`. Write nothing else to that file.
+Append with the shell, for example `echo "done: the cache is never invalidated" >> "<Status file>"`. Write nothing else to that file.

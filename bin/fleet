@@ -4,13 +4,11 @@
 # lead runs the workers that change that project.
 #
 # Every task is a folder under $FLEET_HOME/tasks/<name>/ holding brief.md (the
-# project lead's instructions), meta (what this script recorded), status (lines the
-# agent appends), sent (news a session's hook delivered and that session has
-# not acked yet), and up (the outcome last passed to the orchestrator). A project lead
-# is itself a task, lead-<project>, whose status lines are its reports to the
-# orchestrator. Every agent runs in an hc terminal detached from whoever started
-# it, so any agent can die and its replacement picks up from these files. Run
-# `fleet help` for commands.
+# project lead's instructions), meta (what this script recorded), status (lines
+# the agent appends), and sent (news a session's hook delivered and that
+# session has not acked yet). A project lead is itself a task, lead-<project>,
+# whose status lines are its reports and its workers' outcomes, for the
+# orchestrator. README.md explains the design; `fleet help` lists commands.
 set -euo pipefail
 
 die() { echo "fleet: $*" >&2; exit 1; }
@@ -22,8 +20,8 @@ FLEET_HOME=$(mixed "${FLEET_HOME:-$HOME/.fleet}")
 TASKS=$FLEET_HOME/tasks
 # The project registry: one "<name><TAB><repo><TAB><description>" line each.
 PROJECTS=$FLEET_HOME/projects
-# One folder per orchestrator or project lead session, named by its Claude Code session id: the
-# project it leads (absent for the orchestrator) and its hook's pid.
+# One folder per session, named by its Claude Code session id: the project it
+# leads (absent for the orchestrator) and its hook's pid.
 SESSIONS=$FLEET_HOME/sessions
 SESSION=${CLAUDE_CODE_SESSION_ID:-}
 # This repo: project leads run here, where the orchestrate skill lives.
@@ -60,6 +58,15 @@ meta_set() { # <name> <key> <value>
 status_lines() { # <name>
   local file=$TASKS/$1/status
   if [ -f "$file" ]; then wc -l < "$file" | tr -d ' '; else echo 0; fi
+}
+
+# Whether the task has status lines its supervisor has not acked.
+has_news() { # <name>
+  [ "$(status_lines "$1")" -gt "$(meta_get "$1" seen)" ]
+}
+
+last_status() { # <name>
+  tail -n 1 "$TASKS/$1/status" 2>/dev/null || true
 }
 
 # The agent as one word: starting, working, idle, blocked, error, exited, or
@@ -106,13 +113,6 @@ project_repo() { # <name>: its repo, or nothing
   [ ! -f "$PROJECTS" ] || awk -F'\t' -v n="$1" '$1 == n { print $2; exit }' "$PROJECTS"
 }
 
-# A repo's project name; an unregistered repo goes by its folder name.
-project_of() { # <repo>
-  local name=""
-  [ ! -f "$PROJECTS" ] || name=$(awk -F'\t' -v r="$1" '$2 == r { print $1; exit }' "$PROJECTS")
-  printf '%s\n' "${name:-$(basename "$1")}"
-}
-
 need_project() { # <name>: its repo, or die
   local repo; repo=$(project_repo "$1")
   [ -n "$repo" ] || die "no project $1; see fleet project ls"
@@ -156,25 +156,29 @@ tasks() {
   return 0
 }
 
-# The worker tasks in a repo.
-project_tasks() { # <repo>
-  local name
-  for name in $(tasks); do
-    if [ "$(meta_get "$name" role)" != lead ] && [ "$(meta_get "$name" repo)" = "$1" ]; then
-      echo "$name"
-    fi
+# The tasks whose meta has every given line, one grep per line over all metas.
+tasks_with() { # <meta line>...
+  local -a metas=("$TASKS"/*/meta)
+  [ -f "${metas[0]}" ] || return 0
+  local line
+  for line in "$@"; do
+    mapfile -t metas < <(grep -lx -- "$line" "${metas[@]}" || true)
+    [ ${#metas[@]} -gt 0 ] || return 0
   done
+  local meta
+  for meta in "${metas[@]}"; do basename "$(dirname "$meta")"; done
+}
+
+# A project's worker tasks: every task with that project except its lead.
+project_tasks() { # <project>
+  tasks_with "project=$1" | grep -vx "lead-$1" || true
 }
 
 # The tasks this session supervises: the orchestrator supervises the project
 # leads; a project lead supervises its project's workers.
 my_tasks() {
-  local project name
-  project=$(scope)
-  if [ -n "$project" ]; then project_tasks "$(project_repo "$project")"; return; fi
-  for name in $(tasks); do
-    [ "$(meta_get "$name" role)" != lead ] || echo "$name"
-  done
+  local project; project=$(scope)
+  if [ -n "$project" ]; then project_tasks "$project"; else tasks_with role=lead; fi
 }
 
 cmd_scope() {
@@ -199,15 +203,15 @@ cmd_lead() {
   [ $# -eq 1 ] || die "usage: fleet lead <project>"
   need
   [ -z "$(scope)" ] || die "only the orchestrator starts project leads"
-  local project=$1 repo name dir
-  repo=$(need_project "$project")
+  local project=$1 name dir
+  need_project "$project" >/dev/null
   name=lead-$project
   dir=$(task_dir "$name")
   [ ! -e "$dir/meta" ] || die "$name already exists; if it stopped, use fleet relaunch $name"
   ! "$HC" get "$name" --json >/dev/null 2>&1 || die "an hc terminal named $name already exists"
   mkdir -p "$dir"
-  printf 'role=lead\nproject=%s\nrepo=%s\ncwd=%s\nseen=0\nacked_state=\nacked_turn=0\n' \
-    "$project" "$repo" "$FLEET_ROOT" > "$dir/meta"
+  printf 'role=lead\nproject=%s\ncwd=%s\nseen=0\nacked_state=\nacked_turn=0\n' \
+    "$project" "$FLEET_ROOT" > "$dir/meta"
   : > "$dir/status"
   launch "$name"
 }
@@ -216,7 +220,13 @@ cmd_report() {
   [ $# -ge 1 ] || die "usage: fleet report <text>"
   local project; project=$(scope)
   [ -n "$project" ] || die "only a project lead reports; the orchestrator talks to the user"
-  printf 'report: %s\n' "$*" >> "$TASKS/lead-$project/status"
+  tell_orchestrator "$project" "report: $*"
+}
+
+# Append a line to the project lead's status file, where the orchestrator's
+# hook sees it.
+tell_orchestrator() { # <project> <line>
+  printf '%s\n' "$2" >> "$TASKS/lead-$1/status"
 }
 
 # --- tasks ----------------------------------------------------------------
@@ -271,11 +281,9 @@ launch() { # <name> [<message>]
   if [ "$role" = lead ] || [ "$(printf '%s' "$out" | jqr '.first_message.sent // false')" = true ]; then
     echo "started $name ($role) in $cwd"
   else
-    # The undelivered message carried the template's role instructions too,
-    # and hc cannot resend it, so point the worker at the template itself.
     echo "started $name, but its brief was not delivered."
     echo "Check its screen with: hc read $name"
-    echo "Once clear, deliver it with: hc send $name \"Your role instructions are in $FLEET_ROOT/herdr-core/templates/$role.md (skip its frontmatter). Read them in full. $2\""
+    echo "Once clear, deliver it with: hc send $name \"$2\""
   fi
 }
 
@@ -307,11 +315,14 @@ cmd_spawn() {
     mkdir -p "$FLEET_HOME/reports"
   fi
 
-  printf 'role=%s\nrepo=%s\ncwd=%s\nbranch=%s\nbase=%s\nreport=%s\nseen=0\nacked_state=\nacked_turn=0\n' \
-    "$role" "$repo" "$cwd" "$branch" "$base" "$report" > "$dir/meta"
+  printf 'role=%s\nproject=%s\nrepo=%s\ncwd=%s\nbranch=%s\nbase=%s\nreport=%s\nseen=0\nacked_state=\nacked_turn=0\n' \
+    "$role" "$project" "$repo" "$cwd" "$branch" "$base" "$report" > "$dir/meta"
   : > "$dir/status"
+  # The brief carries everything the worker needs, its role's instructions
+  # included, so a worker whose first message was lost recovers from it alone.
   {
-    printf '\n## Fleet\n- Role: %s\n- Status file: %s\n' "$role" "$dir/status"
+    printf '\n## Fleet\n- Role: %s; its instructions are in %s (skip the frontmatter)\n- Status file: %s\n' \
+      "$role" "$FLEET_ROOT/herdr-core/templates/$role.md" "$dir/status"
     if [ "$role" = implement ]; then
       printf -- '- Worktree: %s (branch %s, based on %s)\n' "$cwd" "$branch" "$base"
     else
@@ -341,36 +352,31 @@ cmd_relaunch() {
 
 # --- news -----------------------------------------------------------------
 
-# The outcome of a worker task once its project lead has handled the task's
-# latest news and left it there, for the orchestrator; or nothing. Passing these
-# up is fleet's job, so no outcome depends on a project lead remembering to
-# report it.
+# A worker task's outcome for the orchestrator, or nothing: what its latest
+# line delivered, or a permission prompt its project lead has seen. Acking a
+# worker passes this up, so no outcome depends on a project lead remembering
+# to report it.
 outcome() { # <name>
-  local name=$1 state last rest report
-  [ "$(status_lines "$name")" -le "$(meta_get "$name" seen)" ] || return 0
-  read -r state _ < <(worker "$name")
-  case $state in working|starting) return 0 ;; esac
-  last=$(tail -n 1 "$TASKS/$name/status" 2>/dev/null || true)
+  local name=$1 last rest state
+  last=$(last_status "$name")
   rest=${last#*: }
   case ${last%%:*} in
     done)
       if [ "$(meta_get "$name" role)" = investigate ]; then
-        # The report path comes from fleet's record, not the worker's line.
-        report=$(meta_get "$name" report)
-        echo "$name: findings in $report: ${rest#"$report "}"
+        echo "$name: findings in $(meta_get "$name" report): $rest"
       else
         echo "$name: PR ready: $rest"
       fi ;;
     failed) echo "$name: failed: $rest" ;;
     *)
-      if [ "$state" = blocked ] && [ "$(meta_get "$name" acked_state)" = blocked ]; then
-        echo "$name: worker is waiting on a permission prompt"
-      fi ;;
+      [ "$(meta_get "$name" acked_state)" = blocked ] || return 0
+      read -r state _ < <(worker "$name")
+      [ "$state" != blocked ] || echo "$name: worker is waiting on a permission prompt" ;;
   esac
 }
 
-# An agent stopped or stuck in a state whoever supervises it has not acked, or nothing.
-# A project lead sits idle between requests, so idle is news only for workers.
+# An agent stopped or stuck in a state whoever supervises it has not acked, or
+# nothing.
 stopped() { # <name> <states>
   local name=$1 state turn acked acked_turn last
   read -r state turn < <(worker "$name")
@@ -382,31 +388,25 @@ stopped() { # <name> <states>
   [[ " $2 " == *" $state "* ]] || return 0
   [ "$state" != "$acked" ] || [ "$turn" != "${acked_turn:-0}" ] || return 0
   # A worker sitting idle or gone after its handled final line is finished, not news.
-  last=$(tail -n 1 "$TASKS/$name/status" 2>/dev/null | cut -d: -f1)
+  last=$(last_status "$name" | cut -d: -f1)
   case $state:$last in idle:done|idle:failed|exited:done|exited:failed|gone:done|gone:failed) return ;; esac
   echo "$name: agent $state"
 }
 
-# What a task has for whoever supervises it, or nothing. For a project lead: its reports,
-# its own stop, and its project's outcomes not yet passed up.
+# What a task has for whoever supervises it, or nothing: new status lines, or
+# else a stop. A project lead sits idle between requests, so idle is news only
+# for workers.
 attention() { # <name>
-  local name=$1 seen task row rows=""
-  seen=$(meta_get "$name" seen)
-  if [ "$(status_lines "$name")" -gt "${seen:-0}" ]; then
+  local name=$1 seen
+  if has_news "$name"; then
+    seen=$(meta_get "$name" seen)
     echo "$name: new status:"
-    tail -n "+$(( ${seen:-0} + 1 ))" "$TASKS/$name/status" | sed 's/^/  /'
-    [ "$(meta_get "$name" role)" = lead ] || return 0
-  fi
-  if [ "$(meta_get "$name" role)" != lead ]; then
+    tail -n "+$(( seen + 1 ))" "$TASKS/$name/status" | sed 's/^/  /'
+  elif [ "$(meta_get "$name" role)" = lead ]; then
+    stopped "$name" "blocked error exited gone"
+  else
     stopped "$name" "blocked error exited gone idle"
-    return
   fi
-  stopped "$name" "blocked error exited gone"
-  for task in $(project_tasks "$(meta_get "$name" repo)"); do
-    row=$(outcome "$task")
-    [ -z "$row" ] || [ "$row" = "$(cat "$TASKS/$task/up" 2>/dev/null)" ] || rows+="  $row"$'\n'
-  done
-  [ -z "$rows" ] || printf '%s: outcomes:\n%s' "$name" "$rows"
 }
 
 # Every attention line of this session's tasks, or nothing.
@@ -488,22 +488,24 @@ cmd_hook() {
   done
 }
 
-# Acking a project lead also marks its project's outcomes as passed up.
+# Acking a worker its project lead has left idle passes the worker's outcome
+# up to the orchestrator, once per outcome.
 cmd_ack() {
   [ $# -eq 1 ] || die "usage: fleet ack <name>"
   need
-  local name=$1 state turn task row
+  local name=$1 state turn row
   [ -f "$(task_dir "$name")/meta" ] || die "no task $name"
   read -r state turn < <(worker "$name")
   meta_set "$name" seen "$(status_lines "$name")"
   meta_set "$name" acked_state "$( [ "$state" = working ] || echo "$state")"
   meta_set "$name" acked_turn "$turn"
   rm -f "$TASKS/$name/sent"
-  [ "$(meta_get "$name" role)" = lead ] || return 0
-  for task in $(project_tasks "$(meta_get "$name" repo)"); do
-    row=$(outcome "$task")
-    if [ -n "$row" ]; then printf '%s\n' "$row" > "$TASKS/$task/up"; else rm -f "$TASKS/$task/up"; fi
-  done
+  [ "$(meta_get "$name" role)" != lead ] || return 0
+  case $state in working|starting) return 0 ;; esac
+  row=$(outcome "$name")
+  [ -n "$row" ] && [ "$row" != "$(meta_get "$name" passed)" ] || return 0
+  tell_orchestrator "$(meta_get "$name" project)" "outcome: $row"
+  meta_set "$name" passed "$row"
 }
 
 # --- views ----------------------------------------------------------------
@@ -528,9 +530,9 @@ cmd_ls() {
   for name in $(my_tasks); do
     read -r state turn < <(worker "$name")
     seen=$(meta_get "$name" seen); lines=$(status_lines "$name")
-    last=$(tail -n 1 "$TASKS/$name/status" 2>/dev/null || true)
+    last=$(last_status "$name")
     pr=$(pr_of "$name" | cut -d' ' -f1,2)
-    printf '%-24s %-16s %-12s %-9s %-4s %s\n' "$name" "$(project_of "$(meta_get "$name" repo)")" \
+    printf '%-24s %-16s %-12s %-9s %-4s %s\n' "$name" "$(meta_get "$name" project)" \
       "$(meta_get "$name" role)" "$state" \
       "$(( lines - ${seen:-0} ))" "${last:--}${pr:+ | PR $pr}"
   done
@@ -541,16 +543,16 @@ cmd_ls() {
 # task's pr_of line when it is already known, to skip looking it up again.
 landed_row() { # <name> [<pr_of line>]
   local name=$1 last rest pr url delivery=""
-  last=$(tail -n 1 "$TASKS/$name/status" 2>/dev/null || true)
+  last=$(last_status "$name")
   [ "${last%%:*}" = done ] || return 0
   rest=${last#*: }
   if [ "$(meta_get "$name" role)" = investigate ]; then
-    delivery="${rest#* } (report ${rest%% *})"
+    delivery="$rest (report $(meta_get "$name" report))"
   else
     read -r pr url _ <<< "${2:-$(pr_of "$name")}"
     [ "$pr" != MERGED ] || delivery="merged $url"
   fi
-  [ -z "$delivery" ] || printf '%s/%s: %s\n' "$(project_of "$(meta_get "$name" repo)")" "$name" "$delivery"
+  [ -z "$delivery" ] || printf '%s/%s: %s\n' "$(meta_get "$name" project)" "$name" "$delivery"
 }
 
 # Every clean of a delivered task appends its landed_row here, dated, so the
@@ -574,9 +576,9 @@ cmd_digest() {
   for name in $(tasks); do
     [ "$(meta_get "$name" role)" != lead ] || continue
     read -r state turn < <(worker "$name")
-    last=$(tail -n 1 "$TASKS/$name/status" 2>/dev/null || true)
+    last=$(last_status "$name")
     rest=${last#*: }; summary=${rest#* }
-    row="$(project_of "$(meta_get "$name" repo)")/$name:"
+    row="$(meta_get "$name" project)/$name:"
     # A busy worker is underway whatever it last reported: its project lead has
     # answered its question or sent it back for more.
     if [ "$state" = working ] || [ "$state" = starting ]; then
@@ -584,7 +586,7 @@ cmd_digest() {
       continue
     fi
     # News its project lead has not handled yet is the lead's, not the user's.
-    if [ "$(status_lines "$name")" -gt "$(meta_get "$name" seen)" ]; then
+    if has_news "$name"; then
       underway+="$row with its project lead: $last"$'\n'
       continue
     fi
@@ -633,7 +635,7 @@ cmd_clean() {
 
   # A project lead goes only once its project has no tasks left to supervise.
   if [ "$role" = lead ]; then
-    left=$(project_tasks "$repo" | xargs)
+    left=$(project_tasks "$(meta_get "$name" project)" | xargs)
     [ -z "$left" ] || die "$name still supervises $left; clean those first"
   fi
 

@@ -73,14 +73,17 @@ projects goes to each project's lead as its own part.
 
 ### Supervise
 
-News about a project lead is one of:
+News about a project lead is new status lines, each one of:
 
-- `new status: report: ...`: the project lead's report: a question only the
-  user can answer, a recommendation, or a problem. Relay it to the user.
-- `outcomes:`: a task's outcome its project lead has handled, passed up by
-  fleet: a PR ready for review, findings, a failure, or a worker waiting on a
-  permission prompt. Relay it to the user. For findings, read the report and
+- `report: ...`: the project lead's own report: a question only the user can
+  answer, a recommendation, or a problem. Relay it to the user.
+- `outcome: ...`: a worker's outcome its project lead has handled, passed up
+  by fleet: a PR ready for review, findings, a failure, or a worker waiting on
+  a permission prompt. Relay it to the user. For findings, read the report and
   relay the answer, not just the path.
+
+Or the project lead itself stopped:
+
 - `agent exited`, `gone`, or `error`: the project lead stopped. Run
   `bin/fleet relaunch lead-<project>`; it resumes its project's tasks.
 - `agent blocked`: the project lead is waiting on a permission prompt. Show
@@ -112,8 +115,8 @@ dispatch them, and verify what comes back. Your own commands stay to
 
 Nobody reads this chat. The orchestrator hears from you only through the fleet:
 
-- **Outcomes reach it on their own.** Once you ack a task's news and leave the
-  worker idle, fleet passes the task's latest line up: a PR ready for review,
+- **Outcomes reach it on their own.** When you ack a task and leave its worker
+  idle, fleet passes the task's latest line up: a PR ready for review,
   findings, a failure, or a worker on a permission prompt. Ack only after you
   have verified the work (step 4) or decided to stop it.
 - **Everything else** you would say to the user, such as a question you cannot
