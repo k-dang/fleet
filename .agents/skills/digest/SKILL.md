@@ -9,7 +9,7 @@ Run `bin/fleet digest` (from this repo) and relay its four sections to the
 user in this order: **Needs you**, **Underway**, **Finished** (done, not yet
 cleaned up), **Recently landed** (cleaned up, newest first).
 
-- Keep each row's project (`<repo>/<task>`) and every full `https://` URL and
+- Keep each row's project (`<project>/<task>`) and every full `https://` URL and
   report path.
 - Say each row in plain words; leave out mechanics such as status lines,
   terminals, and acks.
