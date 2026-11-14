@@ -94,8 +94,9 @@ fleet scope [<project>]                   make this session the project's lead, 
 fleet lead <project>                      start the project's lead (orchestrator only)
 fleet report <text>                       pass a report to the orchestrator (project lead only)
 fleet new <name>                          create a task and print its brief path
-fleet spawn <name> <implement|investigate> <project> [<repo>]
-                                          start a worker on the filled-in brief in one
+fleet spawn <name> <template> <project> [<repo>]
+                                          start a worker from an implement* or
+                                          investigate* template on the filled-in brief in one
                                           of the project's repos, by path or folder
                                           name; required when it has several
                                           (that project's lead only)
@@ -288,8 +289,8 @@ EOF
 }
 
 # Start the agent terminal for a task whose meta is already written. A worker
-# runs its role's hc template on <message>; a project lead runs Claude Code on
-# its /orchestrate command.
+# runs its hc template on <message>; a project lead runs Claude Code on its
+# /orchestrate command.
 launch() { # <name> [<message>]
   local name=$1 role cwd space out
   local -a agent
@@ -298,7 +299,7 @@ launch() { # <name> [<message>]
   if [ "$role" = lead ]; then
     agent=(claude --model claude-opus-5-5 --permission-mode auto "/orchestrate $(meta_get "$name" project)")
   else
-    agent=("$role" "$2")
+    agent=("$(meta_get "$name" template)" "$2")
   fi
   # Show agents in the launcher's Herdr space when it runs in one.
   space=fleet
@@ -323,11 +324,15 @@ launch() { # <name> [<message>]
 }
 
 cmd_spawn() {
-  [ $# -eq 3 ] || [ $# -eq 4 ] || die "usage: fleet spawn <name> <implement|investigate> <project> [<repo>]"
+  [ $# -eq 3 ] || [ $# -eq 4 ] || die "usage: fleet spawn <name> <template> <project> [<repo>]"
   need
-  local name=$1 role=$2 project=$3 dir repo cwd branch="" base="" report=""
+  local name=$1 template=$2 project=$3 role dir repo cwd branch="" base="" report=""
   dir=$(task_dir "$name")
-  case $role in implement|investigate) ;; *) die "role must be implement or investigate" ;; esac
+  # A template's name starts with its role: implement-quick is an implement worker.
+  role=${template%%-*}
+  case $role in implement|investigate) ;; *) die "template must be named implement[-...] or investigate[-...]: $template" ;; esac
+  [ "$("$HC" templates | jqr --arg t "$template" 'any(.templates[]; .name == $t)')" = true ] \
+    || die "hc has no template $template; see hc templates"
   repo=$(task_repo "$project" "${4:-}")
   [ "$(scope)" = "$project" ] || die "workers for $project are started by its project lead"
   [ -f "$dir/brief.md" ] || die "no brief; run: fleet new $name"
@@ -350,14 +355,14 @@ cmd_spawn() {
     mkdir -p "$FLEET_HOME/reports"
   fi
 
-  printf 'role=%s\nproject=%s\nrepo=%s\ncwd=%s\nbranch=%s\nbase=%s\nreport=%s\nseen=0\nacked_state=\nacked_turn=0\n' \
-    "$role" "$project" "$repo" "$cwd" "$branch" "$base" "$report" > "$dir/meta"
+  printf 'role=%s\ntemplate=%s\nproject=%s\nrepo=%s\ncwd=%s\nbranch=%s\nbase=%s\nreport=%s\nseen=0\nacked_state=\nacked_turn=0\n' \
+    "$role" "$template" "$project" "$repo" "$cwd" "$branch" "$base" "$report" > "$dir/meta"
   : > "$dir/status"
   # The brief carries everything the worker needs, its role's instructions
   # included, so a worker whose first message was lost recovers from it alone.
   {
     printf '\n## Fleet\n- Role: %s; its instructions are in %s (skip the frontmatter)\n- Status file: %s\n' \
-      "$role" "$FLEET_ROOT/herdr-core/templates/$role.md" "$dir/status"
+      "$role" "$FLEET_ROOT/herdr-core/templates/$template.md" "$dir/status"
     if [ "$role" = implement ]; then
       printf -- '- Worktree: %s (branch %s, based on %s)\n' "$cwd" "$branch" "$base"
     else
