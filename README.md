@@ -12,7 +12,8 @@ Workers take one of two roles:
 - **investigate**: read-only; answers one question in a report file.
 
 fleet currently runs its agents in [hc](https://herdr.dev) (Herdr Core)
-terminals, with Claude Code as the agent harness.
+terminals, with Claude Code as the harness for the orchestrator and project
+leads; a worker runs whichever harness its template names.
 
 ## Layout
 
@@ -24,7 +25,12 @@ terminals, with Claude Code as the agent harness.
   the symlink checks out as a link.
 - `.agents/skills/digest/`: `/digest`, a catch-up on every task by project
   (`bin/fleet digest`). Linked into `.claude/skills/` the same way.
-- `herdr-core/templates/`: the worker roles as hc templates.
+- `herdr-core/templates/`: the workers as hc templates. Each name starts with
+  its role (`implement`, `implement-quick`); its `command:` line picks the harness
+  and model, and its description tells a project lead when to use it. To change
+  a worker's model everywhere, edit its `command:` line; to add a kind of
+  worker, add a template; then rerun the install. To use other models on one
+  machine, see Install. `implement-quick` needs `pi` on `PATH`.
 - `bin/fleet`: fleet's mechanics (project registry, task records,
   worktrees, agent launch, waiting, cleanup). Bash; on Windows it runs in Git
   Bash. Needs `hc`, `jq`, `git`, and `gh` on `PATH` (or `FLEET_HC` pointing at
@@ -74,9 +80,16 @@ workers. Each session keeps its watch, and which role it has, in
 ./install.sh         # macOS / Linux
 ```
 
-This links `herdr-core/templates/` as hc's templates folder
+This copies each template in `herdr-core/templates/` into hc's templates folder
 (`%APPDATA%\herdr-core\templates` on Windows,
 `~/.config/herdr-core/templates` elsewhere). Confirm with `hc templates`.
+
+The copies are this machine's: edit one there to change what it runs here,
+such as a `command:` line naming this machine's models. After the repo's
+templates change, rerun the install to sync. It replaces a copy you have not
+edited and merges the repo's changes into one you have (`git merge-file`). When
+both changed the same lines, it leaves conflict markers in the copy for you to
+resolve.
 
 ## Use
 

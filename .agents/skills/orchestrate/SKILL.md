@@ -156,7 +156,16 @@ Report a question when two readings of the request lead to different work.
 
 ### 2. Dispatch
 
-`bin/fleet spawn <name> <implement|investigate> <project> [<repo>]` picks the
+Pick the worker's template from `hc templates`. A template's name starts with
+its task's kind (`implement`, `implement-quick`), and its description says what it
+runs and when to use it:
+
+- The template the user asked for, by name, harness, or model. When none
+  matches, report it rather than substitute another.
+- Otherwise a variant whose description clearly fits better than the plain one.
+- Otherwise the plain `implement` or `investigate`.
+
+`bin/fleet spawn <name> <template> <project> [<repo>]` picks the
 repo the task works in, by path or folder name (required when the project has
 several; a change spanning repos is one task per repo), creates the worktree
 and branch `fleet/<name>` there (implement), appends a Fleet section to the brief
