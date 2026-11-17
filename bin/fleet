@@ -604,9 +604,9 @@ digest_section() { # <title> <rows>
 }
 
 # Where every worker task stands, for the user: what needs them, what is still
-# running, what is finished and ready to clean, and what recently landed and
-# was cleaned. Rows are <project>/<task>, sorted so each project's tasks sit
-# together; recently landed is newest first.
+# running or is its lead's to resolve, what is finished and ready to clean, and
+# what recently landed and was cleaned. Rows are <project>/<task>, sorted so
+# each project's tasks sit together; recently landed is newest first.
 cmd_digest() {
   [ $# -eq 0 ] || die "usage: fleet digest"
   need
@@ -640,7 +640,8 @@ cmd_digest() {
           case $pr in
             MERGED) finished+="$(landed_row "$name" "$prline")"$'\n' ;;
             OPEN) needs+="$row PR to review: $url $summary"$'\n' ;;
-            *) needs+="$row done, but its PR is ${pr:-missing}${url:+ ($url)}"$'\n' ;;
+            # A missing or closed PR is its project lead's to resolve.
+            *) underway+="$row done, but its PR is ${pr:-missing}${url:+ ($url)}"$'\n' ;;
           esac
         fi ;;
       *)
