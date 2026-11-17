@@ -346,7 +346,9 @@ cmd_spawn() {
     fi
     base=$(git -C "$repo" symbolic-ref -q --short refs/remotes/origin/HEAD \
       || git -C "$repo" rev-parse --abbrev-ref HEAD)
-    branch=fleet/$name
+    branch=$name
+    ! git -C "$repo" show-ref --verify --quiet "refs/heads/$branch" \
+      || die "branch $branch already exists in $repo; pick another task name"
     cwd=$FLEET_HOME/worktrees/$(basename "$repo")/$name
     git -C "$repo" worktree add -q -b "$branch" "$cwd" "$base" || die "git worktree add failed"
   else
