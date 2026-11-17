@@ -168,8 +168,9 @@ runs and when to use it:
 `bin/fleet spawn <name> <template> <project> [<repo>]` picks the
 repo the task works in, by path or folder name (required when the project has
 several; a change spanning repos is one task per repo), creates the worktree
-and branch `fleet/<name>` there (implement), appends a Fleet section to the brief
-naming the worktree, report, and status files, and starts the worker. When it
+and branch `<name>` there (implement; it refuses a name whose branch already
+exists), appends a Fleet section to the brief naming the worktree, report, and
+status files, and starts the worker. When it
 says the brief was not delivered, `hc read <name>`, report what blocks startup
 (a trust prompt means the folder sits outside trusted ground), then deliver it
 with the `hc send` command it printed.
