@@ -92,7 +92,8 @@ fleet project ls                          list registered projects
 fleet scope [<project>]                   make this session the project's lead, or
                                           say which role this session has
 fleet lead <project>                      start the project's lead (orchestrator only)
-fleet report <text>                       pass a report to the orchestrator (project lead only)
+fleet report [--ask] <text>               pass a report to the orchestrator (project lead only);
+                                          --ask when the user must answer or act
 fleet new <name>                          create a task and print its brief path
 fleet spawn <name> <template> <project> [<repo>]
                                           start a worker from an implement* or
@@ -103,7 +104,8 @@ fleet spawn <name> <template> <project> [<repo>]
 fleet relaunch <name>                     start a new agent on an existing task
 fleet wait [--timeout SECONDS]            block until a task needs this session (default 100)
 fleet ack <name>                          mark a task's news as handled
-fleet hook                                every session's Stop hook; run by Claude Code
+fleet hook [--prompt]                     every session's Stop hook, or with --prompt its
+                                          UserPromptSubmit hook; run by Claude Code
 fleet ls                                  one line per task this session supervises
 fleet digest                              where things stand, by project: needs you,
                                           underway, finished, recently landed
@@ -253,15 +255,20 @@ cmd_lead() {
   launch "$name"
 }
 
+# A report wakes the orchestrator at once only with --ask; otherwise it waits
+# to be batched with other news (see cmd_hook).
 cmd_report() {
-  [ $# -ge 1 ] || die "usage: fleet report <text>"
+  local kind=report
+  if [ "${1:-}" = --ask ]; then kind=ask; shift; fi
+  [ $# -ge 1 ] || die "usage: fleet report [--ask] <text>"
   local project; project=$(scope)
   [ -n "$project" ] || die "only a project lead reports; the orchestrator talks to the user"
-  tell_orchestrator "$project" "report: $*"
+  tell_orchestrator "$project" "$kind: $*"
 }
 
 # Append a line to the project lead's status file, where the orchestrator's
-# hook sees it.
+# hook sees it. An ask: line is one the user must act on, and wakes the
+# orchestrator at once; report: and outcome: lines wait to be batched.
 tell_orchestrator() { # <project> <line>
   printf '%s\n' "$2" >> "$TASKS/lead-$1/status"
 }
@@ -393,8 +400,9 @@ cmd_relaunch() {
 }
 
 
-# A worker task's outcome for the orchestrator, or nothing: what its latest
-# line delivered, or a permission prompt its project lead has seen.
+# A worker task's outcome as the orchestrator's status line, or nothing: what
+# its latest line delivered, or a permission prompt its project lead has seen.
+# A failure or a prompt is an ask: the user must decide or approve.
 outcome() { # <name>
   local name=$1 last rest state
   last=$(last_status "$name")
@@ -402,15 +410,15 @@ outcome() { # <name>
   case ${last%%:*} in
     done)
       if [ "$(meta_get "$name" role)" = investigate ]; then
-        echo "$name: findings in $(meta_get "$name" report): $rest"
+        echo "outcome: $name: findings in $(meta_get "$name" report): $rest"
       else
-        echo "$name: PR ready: $rest"
+        echo "outcome: $name: PR ready: $rest"
       fi ;;
-    failed) echo "$name: failed: $rest" ;;
+    failed) echo "ask: $name: failed: $rest" ;;
     *)
       [ "$(meta_get "$name" acked_state)" = blocked ] || return 0
       read -r state _ < <(worker "$name")
-      [ "$state" != blocked ] || echo "$name: worker is waiting on a permission prompt" ;;
+      [ "$state" != blocked ] || echo "ask: $name: worker is waiting on a permission prompt" ;;
   esac
 }
 
@@ -481,14 +489,44 @@ HOOK_FAILED=$FLEET_HOME/hook.failed
 # Under the hook's 28800-second timeout in SKILL.md: Claude Code drops the
 # wake of a hook it timed out, so the watch ends itself first.
 HOOK_SECONDS=28500
+# How long a watch holds news after its latest change, so a burst wakes the
+# session once: SETTLE for a project lead, or for the orchestrator when the
+# news holds something the user must act on; BATCH for the orchestrator's other
+# news (PRs ready, findings, reports), which the user's next message also
+# carries sooner (fleet hook --prompt).
+SETTLE=${FLEET_SETTLE:-60}
+BATCH=${FLEET_BATCH:-1200}
+
+# This session's undelivered news: each task's entry unless the session was
+# already handed that same entry. With --mark, records them as handed.
+unsent() { # [--mark]
+  local name entry sent
+  for name in $(my_tasks); do
+    entry=$(attention "$name"); sent=$TASKS/$name/sent
+    if [ -z "$entry" ]; then
+      rm -f "$sent"
+    elif [ "$entry" != "$(cat "$sent" 2>/dev/null)" ]; then
+      [ "${1:-}" != --mark ] || printf '%s\n' "$entry" > "$sent"
+      printf '%s\n' "$entry"
+    fi
+  done
+}
+
+# Whether news needs the orchestrator now: an ask: line, or a stopped lead.
+urgent() { # <news>
+  printf '%s\n' "$1" | grep -qE '^  ask:|^[a-z0-9-]+: agent '
+}
 
 cmd_hook() {
-  [ $# -eq 0 ] || die "usage: fleet hook (run by Claude Code, not by hand)"
-  local payload err deadline out name entry sent pidfile
+  local prompt=false
+  if [ "${1:-}" = --prompt ]; then prompt=true; shift; fi
+  [ $# -eq 0 ] || die "usage: fleet hook [--prompt] (run by Claude Code, not by hand)"
+  local payload err deadline out last="" changed=0 hold pidfile
   payload=$(cat)
   [ -n "$(tasks)" ] || exit 0
   # Report a broken watch once, not at every turn end.
   if ! err=$(need 2>&1); then
+    $prompt && exit 0
     [ ! -e "$HOOK_FAILED" ] || exit 0
     printf '%s\n' "$err" > "$HOOK_FAILED"
     echo "fleet: this session's watch cannot run: $err. Tell the user; until it is fixed, supervise with bin/fleet wait." >&2
@@ -498,6 +536,12 @@ cmd_hook() {
   SESSION=$(printf '%s' "$payload" | jqr '.session_id // empty')
   [ -n "$SESSION" ] || die "the hook's payload has no session_id"
   [ -n "$(my_tasks)" ] || exit 0
+  # On the user's message: hand over whatever news is waiting with it, as context.
+  if $prompt; then
+    out=$(unsent --mark)
+    [ -z "$out" ] || printf 'fleet news, held for this message:\n%s\nHandle each entry alongside the message, then bin/fleet ack <name>.\n' "$out"
+    exit 0
+  fi
   mkdir -p "$SESSIONS/$SESSION"
   pidfile=$SESSIONS/$SESSION/hook.pid
   echo $$ > "$pidfile"
@@ -505,19 +549,15 @@ cmd_hook() {
   while [ "$(cat "$pidfile" 2>/dev/null)" = $$ ]; do
     # Each task's entry wakes the session once; ack clears its sent record so the
     # task's next news wakes it again.
-    out=""
-    for name in $(my_tasks); do
-      entry=$(attention "$name"); sent=$TASKS/$name/sent
-      if [ -z "$entry" ]; then
-        rm -f "$sent"
-      elif [ "$entry" != "$(cat "$sent" 2>/dev/null)" ]; then
-        printf '%s\n' "$entry" > "$sent"
-        out+="$entry"$'\n'
-      fi
-    done
+    out=$(unsent)
+    if [ "$out" != "$last" ]; then last=$out; changed=$(date +%s); fi
     if [ -n "$out" ]; then
-      printf 'fleet news:\n%sHandle each entry, then bin/fleet ack <name>.\n' "$out" >&2
-      exit 2
+      hold=$BATCH
+      if [ -n "$(scope)" ] || urgent "$out"; then hold=$SETTLE; fi
+      if [ $(( $(date +%s) - changed )) -ge "$hold" ]; then
+        printf 'fleet news:\n%s\nHandle each entry, then bin/fleet ack <name>.\n' "$(unsent --mark)" >&2
+        exit 2
+      fi
     fi
     if [ "$(date +%s)" -ge "$deadline" ]; then
       echo "fleet: nothing new for $(( HOOK_SECONDS / 3600 )) hours; the watch restarts when this turn ends." >&2
@@ -543,7 +583,7 @@ cmd_ack() {
   case $state in working|starting) return 0 ;; esac
   row=$(outcome "$name")
   [ -n "$row" ] && [ "$row" != "$(meta_get "$name" passed)" ] || return 0
-  tell_orchestrator "$(meta_get "$name" project)" "outcome: $row"
+  tell_orchestrator "$(meta_get "$name" project)" "$row"
   meta_set "$name" passed "$row"
 }
 

@@ -10,6 +10,10 @@ hooks:
           command: 'bash "$CLAUDE_PROJECT_DIR/bin/fleet" hook'
           asyncRewake: true
           timeout: 28800
+  UserPromptSubmit:
+    - hooks:
+        - type: command
+          command: 'bash "$CLAUDE_PROJECT_DIR/bin/fleet" hook --prompt'
 ---
 
 # Orchestrate
@@ -38,9 +42,12 @@ the orchestrator: follow **Orchestrator**.
 
 Either way, your Stop hook watches the fleet after every turn you end and
 wakes you with a `Stop hook feedback` message listing `fleet news`: one entry
-per task that needs you. Never loop or sleep waiting yourself. Each entry
-wakes you once. Handle it, then run `bin/fleet ack <name>` so your replacement
-sees it handled.
+per task that needs you. It waits for news to settle first, so a burst wakes
+you once, and the orchestrator's news that asks nothing of the user waits
+longer still to be batched. News waiting when the user sends a message
+arrives with that message instead. Never loop or sleep waiting yourself. Each
+entry reaches you once. Handle it, then run `bin/fleet ack <name>` so your
+replacement sees it handled.
 
 ## Orchestrator
 
@@ -78,12 +85,18 @@ projects goes to each project's lead as its own part.
 
 News about a project lead is new status lines, each one of:
 
-- `report: ...`: the project lead's own report: a question only the user can
-  answer, a recommendation, or a problem. Relay it to the user.
-- `outcome: ...`: a worker's outcome its project lead has handled, passed up
-  by fleet: a PR ready for review, findings, a failure, or a worker waiting on
-  a permission prompt. Relay it to the user. For findings, read the report and
-  relay the answer, not just the path.
+- `ask: ...`: something the user must act on: a question only they can
+  answer, a worker's failure, or a worker waiting on a permission prompt.
+  These wake you within a minute. Relay each one.
+- `outcome: ...`: a worker's outcome its project lead has verified, passed up
+  by fleet: a PR ready for review, or findings. For findings, read the report
+  and relay the answer, not just the path.
+- `report: ...`: the project lead's note for the user, such as a
+  recommendation or a risk to weigh.
+
+Outcomes and reports arrive batched, so relay them together in one message.
+When they come with a user's message, answer the message first, then add them
+briefly.
 
 Or the project lead itself stopped:
 
@@ -123,9 +136,14 @@ Nobody reads this chat. The orchestrator hears from you only through the fleet:
   idle, fleet passes the task's latest line up: a PR ready for review,
   findings, a failure, or a worker on a permission prompt. Ack only after you
   have verified the work (step 4) or decided to stop it.
-- **Everything else** you would say to the user, such as a question you cannot
-  answer from the brief or a recommendation on an outcome, is
-  `bin/fleet report "<text>"`. A sentence written only in this chat is lost.
+- **A question only the user can answer**, or a decision you cannot make
+  from the brief, is `bin/fleet report --ask "<text>"`. It reaches the user
+  within a minute.
+- **Everything else** you would say to the user, such as a recommendation or
+  risk on an outcome, is `bin/fleet report "<text>"`. It waits to be batched
+  with other news, so report only what changes what the user decides: never
+  progress, retries, or steps you are taking. A sentence written only in this
+  chat is lost.
 
 If the user types into this terminal directly, answer them here as well.
 
@@ -188,8 +206,9 @@ Once tasks are running, end your turn. Handle each news entry, then
 - `blocked: <question>`: answer from the brief with `hc send <name> "<answer>"`;
   otherwise report the question and relay the answer when it comes. When the
   answer changes the task, record it in the brief first.
-- `failed:`: read it, then re-brief and send a correction, or ack it to pass
-  the failure up.
+- `failed:`: read it, then re-brief and send a correction. Ack it to pass the
+  failure up only when a correction cannot fix it; it reaches the user as an
+  ask.
 - `agent blocked`: the worker waits on a permission prompt. Ack it; fleet
   passes it up, and the user approves it in the worker's tab.
 - `agent idle` with no status line: `hc read --lines 40 <name>`; it may have

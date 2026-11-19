@@ -55,8 +55,9 @@ its replacement picks them up with `bin/fleet ls` and `bin/fleet wait`.
 Nothing a worker delivers depends on a project lead remembering to report it.
 Once the project lead has handled a task's latest line (verified a PR, read a
 report, given up on a failure) and acked it, fleet appends that outcome to the
-project lead's status file itself. The project lead adds its own judgement,
-such as questions only the user can answer, with `bin/fleet report`.
+project lead's status file itself. The project lead adds its own judgement
+with `bin/fleet report`, or `bin/fleet report --ask` for a question only the
+user can answer.
 
 `bin/fleet digest` says where every task stands, grouped by project: what
 needs you, what is underway, what is finished, and what recently landed
@@ -69,6 +70,14 @@ after every turn a session ends and wakes the idle session when it has news: the
 lead for its project leads' reports and outcomes, a project lead for its
 workers. Each session keeps its watch, and which role it has, in
 `~/.fleet/sessions/<session id>/`.
+
+To keep the user's conversation quiet, the watch holds news until it settles
+(`FLEET_SETTLE`, 60 seconds), so a burst wakes a session once. For the
+top lead, only an `ask:` line (a question, failure, or permission prompt) or a
+stopped project lead wakes it that soon. PRs ready, findings, and reports wait
+until the fleet has been quiet for `FLEET_BATCH` (20 minutes), unless the user
+writes first: a `UserPromptSubmit` hook (`bin/fleet hook --prompt`) hands
+waiting news over with their message.
 
 ## Install
 
