@@ -85,6 +85,8 @@ projects goes to each project's lead as its own part.
 
 News about a project lead is new status lines, each one of:
 
+- `reply: ...`: the project lead's answer to a request you passed down from
+  the user. These wake you within a minute. Relay each one.
 - `ask: ...`: something the user must act on: a question only they can
   answer, a worker's failure, or a worker waiting on a permission prompt.
   These wake you within a minute. Relay each one.
@@ -136,11 +138,14 @@ Nobody reads this chat. The orchestrator hears from you only through the fleet:
   idle, fleet passes the task's latest line up: a PR ready for review,
   findings, a failure, or a worker on a permission prompt. Ack only after you
   have verified the work (step 4) or decided to stop it.
+- **An answer to a request the orchestrator passed down**, such as a status
+  table the user asked for, is `bin/fleet report --reply "<text>"`. It
+  reaches the user within a minute.
 - **A question only the user can answer**, or a decision you cannot make
   from the brief, is `bin/fleet report --ask "<text>"`. It reaches the user
   within a minute.
-- **Everything else** you would say to the user, such as a recommendation or
-  risk on an outcome, is `bin/fleet report "<text>"`. It waits to be batched
+- **Everything else**, an unprompted note for the user such as a
+  recommendation or risk on an outcome, is `bin/fleet report "<text>"`. It waits to be batched
   with other news, so report only what changes what the user decides: never
   progress, retries, or steps you are taking. A sentence written only in this
   chat is lost.

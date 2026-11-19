@@ -92,7 +92,8 @@ fleet project ls                          list registered projects
 fleet scope [<project>]                   make this session the project's lead, or
                                           say which role this session has
 fleet lead <project>                      start the project's lead (orchestrator only)
-fleet report [--ask] <text>               pass a report to the orchestrator (project lead only);
+fleet report [--reply|--ask] <text>       pass a report to the orchestrator (project lead only);
+                                          --reply to answer a request it passed down,
                                           --ask when the user must answer or act
 fleet new <name>                          create a task and print its brief path
 fleet spawn <name> <template> <project> [<repo>]
@@ -255,20 +256,22 @@ cmd_lead() {
   launch "$name"
 }
 
-# A report wakes the orchestrator at once only with --ask; otherwise it waits
-# to be batched with other news (see cmd_hook).
+# A report wakes the orchestrator at once only with --reply (an answer to a
+# request it passed down) or --ask (a question for the user); otherwise it
+# waits to be batched with other news (see cmd_hook).
 cmd_report() {
   local kind=report
-  if [ "${1:-}" = --ask ]; then kind=ask; shift; fi
-  [ $# -ge 1 ] || die "usage: fleet report [--ask] <text>"
+  case ${1:-} in --reply) kind=reply; shift ;; --ask) kind=ask; shift ;; esac
+  [ $# -ge 1 ] || die "usage: fleet report [--reply|--ask] <text>"
   local project; project=$(scope)
   [ -n "$project" ] || die "only a project lead reports; the orchestrator talks to the user"
   tell_orchestrator "$project" "$kind: $*"
 }
 
 # Append a line to the project lead's status file, where the orchestrator's
-# hook sees it. An ask: line is one the user must act on, and wakes the
-# orchestrator at once; report: and outcome: lines wait to be batched.
+# hook sees it. A reply: line answers the user's request and an ask: line is
+# one the user must act on; both wake the orchestrator at once. report: and
+# outcome: lines wait to be batched.
 tell_orchestrator() { # <project> <line>
   printf '%s\n' "$2" >> "$TASKS/lead-$1/status"
 }
@@ -514,9 +517,10 @@ unsent() { # [--mark]
   done
 }
 
-# Whether news needs the orchestrator now: an ask: line, or a stopped lead.
+# Whether news needs the orchestrator now: a reply: or ask: line, or a stopped
+# lead.
 urgent() { # <news>
-  printf '%s\n' "$1" | grep -qE '^  ask:|^[a-z0-9-]+: agent '
+  printf '%s\n' "$1" | grep -qE '^  (reply|ask):|^[a-z0-9-]+: agent '
 }
 
 cmd_hook() {
