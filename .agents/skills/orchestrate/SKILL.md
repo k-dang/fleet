@@ -30,8 +30,8 @@ lists its commands. Run `hc --skill` once per session if its behavior is not
 already in context.
 
 Everything lives on disk under `~/.fleet`. A project lead is itself a task,
-`lead-<project>`, in an hc terminal like any worker. Every agent runs detached
-from whoever started it, so any session can end and its replacement picks up
+`lead-<project>`, in an hc terminal like any worker. Every agent outlives
+whoever started it, so any session can end and its replacement picks up
 from those files.
 
 Project: $ARGUMENTS

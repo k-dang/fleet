@@ -314,9 +314,11 @@ launch() { # <name> [<message>]
     space=$("$HC" get "$HC_TERMINAL_ID" --json 2>/dev/null | jqr '.labels["herdr.space"] // empty' || true)
     space=${space:-fleet}
   fi
-  # Detached from the launcher: the agent outlives it and hc sends it no notes.
+  # The launcher is recorded as its parent, so Herdr's agents list nests
+  # orchestrator > project leads > workers. The agent still outlives the
+  # launcher, and hc sends the launcher no notes about it.
   # MSYS_NO_PATHCONV keeps Git Bash from rewriting "/orchestrate" as a path.
-  out=$(MSYS_NO_PATHCONV=1 "$HC" run --bg --json --no-parent --outlive-parent --no-notify \
+  out=$(MSYS_NO_PATHCONV=1 "$HC" run --bg --json --outlive-parent --no-notify \
     --name "$name" --cwd "$cwd" \
     --label "herdr.space=$space" --label "herdr.tab=$name" \
     "${agent[@]}") || die "hc run failed: $out"

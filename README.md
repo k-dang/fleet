@@ -48,8 +48,9 @@ Each task is a folder in `~/.fleet/tasks/<name>/`: the brief its project lead wr
 fleet's record of the task, and an append-only status file the worker writes
 `done:`, `blocked:`, or `failed:` lines to. A project lead is a task too,
 `lead-<project>`, whose status file is what the orchestrator hears. Every
-agent runs in an hc terminal detached from whoever started it, so closing any
-session stops nothing: work continues, its reports wait in the status files, and
+agent runs in its own hc terminal that outlives whoever started it (hc records
+the starter as its parent, which is how Herdr nests the agents list), so closing
+any session stops nothing: work continues, its reports wait in the status files, and
 its replacement picks them up with `bin/fleet ls` and `bin/fleet wait`.
 
 Nothing a worker delivers depends on a project lead remembering to report it.
