@@ -218,6 +218,14 @@ Once tasks are running, end your turn. Handle each news entry, then
   passes it up, and the user approves it in the worker's tab.
 - `agent idle` with no status line: `hc read --lines 40 <name>`; it may have
   asked something on screen. Reply with `hc send`.
+- `review: <PR URL> <what>`: fleet watches each PR you have verified and acked,
+  and writes this when it gets new review comments, failing checks, or a
+  conflict with its base. Send the worker back:
+  `hc send <name> "Your PR has <what>. Address it and push, or reply on the PR when nothing needs changing, then append a new done: line."`
+  Its new `done:` line is verified like any other (step 4).
+- `closed: <PR URL>`: the PR was closed without merging. Ack it; fleet asks
+  the user whether to drop or redo the work.
+- `merged: <PR URL>, but fleet clean refused: <why>`: report the refusal.
 - `agent error`, `exited`, or `gone` before its last line: `hc read <name>`
   when it still exists, then `bin/fleet relaunch <name>`; the new worker
   resumes from the worktree and the brief. Report it if a relaunch also dies.
@@ -240,7 +248,9 @@ such as risk.
 
 Merge only when the orchestrator relays the user's approval (`gh pr merge <url>`).
 
-Clean up each finished task with `bin/fleet clean <name>`. It stops the
+Once a verified PR merges, fleet cleans up its task itself, within a few
+minutes. Clean up every other finished task, such as an investigation, with
+`bin/fleet clean <name>`. It stops the
 worker and removes the worktree, branch, and task record, keeps an
 investigation's report, and logs a delivered task for `/digest`'s Recently
 landed. It refuses unlanded work: uncommitted changes, commits outside a
