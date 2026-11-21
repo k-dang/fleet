@@ -61,6 +61,13 @@ with `bin/fleet report` for an unprompted note, `bin/fleet report --reply` to
 answer a request the top lead passed down, or `bin/fleet report --ask` for a
 question only the user can answer.
 
+A delivered PR stays watched until it lands. Every few minutes
+(`FLEET_PR_POLL`, 180 seconds) a project lead's watch looks at each PR it has
+verified: once one merges, fleet cleans up its task; new review comments,
+failing checks, or a conflict with its base become news for the project lead,
+which sends the same worker back to the PR; a PR closed unmerged reaches the
+user as a question. Reviewing on GitHub is enough to steer the work.
+
 `bin/fleet digest` says where every task stands, grouped by project: what
 needs you, what is underway, what is finished, and what recently landed
 (`bin/fleet clean` logs each delivered task to `~/.fleet/landed` before

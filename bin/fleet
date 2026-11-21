@@ -5,7 +5,7 @@
 #
 # Every task is a folder under $FLEET_HOME/tasks/<name>/ holding brief.md (the
 # project lead's instructions), meta (what this script recorded), status (lines
-# the agent appends), and sent (news a session's hook delivered and that
+# the agent appends, plus the PR watch's lines; see watch_prs), and sent (news a session's hook delivered and that
 # session has not acked yet). A project lead is itself a task, lead-<project>,
 # whose status lines are its reports and its workers' outcomes, for the
 # orchestrator. README.md explains the design; `fleet help` lists commands.
@@ -420,6 +420,7 @@ outcome() { # <name>
         echo "outcome: $name: PR ready: $rest"
       fi ;;
     failed) echo "ask: $name: failed: $rest" ;;
+    closed) echo "ask: $name: its PR was closed without merging: $rest" ;;
     *)
       [ "$(meta_get "$name" acked_state)" = blocked ] || return 0
       read -r state _ < <(worker "$name")
@@ -527,7 +528,7 @@ cmd_hook() {
   local prompt=false
   if [ "${1:-}" = --prompt ]; then prompt=true; shift; fi
   [ $# -eq 0 ] || die "usage: fleet hook [--prompt] (run by Claude Code, not by hand)"
-  local payload err deadline out last="" changed=0 hold pidfile
+  local payload err deadline out last="" changed=0 hold pidfile project
   payload=$(cat)
   [ -n "$(tasks)" ] || exit 0
   # Report a broken watch once, not at every turn end.
@@ -552,14 +553,16 @@ cmd_hook() {
   pidfile=$SESSIONS/$SESSION/hook.pid
   echo $$ > "$pidfile"
   deadline=$(( $(date +%s) + HOOK_SECONDS ))
+  project=$(scope)
   while [ "$(cat "$pidfile" 2>/dev/null)" = $$ ]; do
+    [ -z "$project" ] || watch_prs
     # Each task's entry wakes the session once; ack clears its sent record so the
     # task's next news wakes it again.
     out=$(unsent)
     if [ "$out" != "$last" ]; then last=$out; changed=$(date +%s); fi
     if [ -n "$out" ]; then
       hold=$BATCH
-      if [ -n "$(scope)" ] || urgent "$out"; then hold=$SETTLE; fi
+      if [ -n "$project" ] || urgent "$out"; then hold=$SETTLE; fi
       if [ $(( $(date +%s) - changed )) -ge "$hold" ]; then
         printf 'fleet news:\n%s\nHandle each entry, then bin/fleet ack <name>.\n' "$(unsent --mark)" >&2
         exit 2
@@ -584,6 +587,8 @@ cmd_ack() {
   meta_set "$name" seen "$(status_lines "$name")"
   meta_set "$name" acked_state "$( [ "$state" = working ] || echo "$state")"
   meta_set "$name" acked_turn "$turn"
+  # The PR watch counts review comments newer than this.
+  meta_set "$name" acked_at "$(date -u +%FT%TZ)"
   rm -f "$TASKS/$name/sent"
   [ "$(meta_get "$name" role)" != lead ] || return 0
   case $state in working|starting) return 0 ;; esac
@@ -601,6 +606,61 @@ pr_of() { # <name>
   [ -n "$branch" ] || return 0
   (cd "$repo" && gh pr view "$branch" --json state,url,headRefOid \
     -q '.state + " " + .url + " " + .headRefOid' 2>/dev/null) || true
+}
+
+# What happened to a delivered task's PR since its project lead acked it, as
+# "<STATE> <url> <what>", or nothing: MERGED, CLOSED, or OPEN with what needs
+# its worker (failing checks, a conflict with its base, new review comments).
+pr_news() { # <name>
+  (cd "$(meta_get "$1" repo)" && gh pr view "$(meta_get "$1" branch)" \
+    --json state,url,mergeable,statusCheckRollup,reviews,comments 2>/dev/null) \
+    | jqr --arg since "$(meta_get "$1" acked_at)" '
+      .url as $url
+      | if .state != "OPEN" then .state + " " + $url
+        else
+          [.statusCheckRollup[]? | select(.conclusion // .state
+             | IN("FAILURE", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE", "ERROR"))
+           | .name // .context] as $failing
+          | ([.reviews[]? | select((.submittedAt // "") > $since
+               and (.state | IN("CHANGES_REQUESTED", "COMMENTED")))]
+             + [.comments[]? | select(.createdAt > $since)] | length) as $comments
+          | [if $failing != [] then "checks failing: " + ($failing | join(", ")) else empty end,
+             if .mergeable == "CONFLICTING" then "conflicts with its base" else empty end,
+             if $comments > 0 then "\($comments) new review comments" else empty end]
+          | if . == [] then empty else "OPEN " + $url + " " + join("; ") end
+        end' || true
+}
+
+# How often, in seconds, a project lead's watch looks at each delivered PR.
+PR_POLL=${FLEET_PR_POLL:-180}
+
+# A project lead's watch over the PRs it has delivered: an implement task whose
+# done: line is acked and whose worker is idle. A merged PR's task is cleaned
+# up here; anything else on a PR becomes a status line the lead hears as news:
+# closed: when it was closed unmerged, review: when it needs its worker again,
+# or merged: when fleet clean refused. Each line stops the watch on that PR
+# until its worker reports done: again and the lead acks it.
+watch_prs() {
+  local name now polled state url what out
+  now=$(date +%s)
+  for name in $(my_tasks); do
+    [ "$(meta_get "$name" role)" = implement ] || continue
+    [ "$(last_status "$name" | cut -d: -f1)" = done ] || continue
+    ! has_news "$name" || continue
+    polled=$(meta_get "$name" pr_polled)
+    [ $(( now - ${polled:-0} )) -ge "$PR_POLL" ] || continue
+    read -r state _ < <(worker "$name")
+    case $state in working|starting) continue ;; esac
+    meta_set "$name" pr_polled "$now"
+    read -r state url what <<< "$(pr_news "$name")"
+    case $state in
+      MERGED)
+        out=$(cmd_clean "$name" 2>&1) \
+          || echo "merged: $url, but fleet clean refused: ${out#fleet: }" >> "$TASKS/$name/status" ;;
+      CLOSED) echo "closed: $url" >> "$TASKS/$name/status" ;;
+      OPEN) echo "review: $url $what" >> "$TASKS/$name/status" ;;
+    esac
+  done
 }
 
 cmd_ls() {
@@ -677,6 +737,7 @@ cmd_digest() {
     case ${last%%:*} in
       blocked) needs+="$row asks: $rest"$'\n' ;;
       failed) needs+="$row failed: $rest"$'\n' ;;
+      closed) needs+="$row PR closed without merging: $rest"$'\n' ;;
       done)
         if [ "$(meta_get "$name" role)" = investigate ]; then
           finished+="$(landed_row "$name")"$'\n'
@@ -692,6 +753,8 @@ cmd_digest() {
         fi ;;
       *)
         if [ "$state" = blocked ]; then needs+="$row worker is waiting on a prompt"$'\n'
+        # The PR watch's lines are the project lead's to resolve.
+        elif [[ $last == review:* || $last == merged:* ]]; then underway+="$row $last"$'\n'
         else underway+="$row stalled: worker $state before reporting"$'\n'; fi ;;
     esac
   done
