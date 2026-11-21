@@ -11,7 +11,7 @@ Treat the repository as read-only: read code, run read-only commands, and write 
 The report contains:
 
 - **Answer**: the direct answer to the Intent, first.
-- **Evidence**: file:line references and the commands you ran, with results.
+- **Evidence**: each Done when condition with what settles it: file:line references and the commands you ran, with their real results. Mark a condition with no evidence as unproven. Label a guess as a guess.
 - **Open questions**: what you could not settle, and why.
 - **Next steps**: recommended actions, each small enough to become its own task.
 
