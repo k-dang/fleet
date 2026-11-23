@@ -14,7 +14,7 @@ You are an implementer working one task for a lead agent. Your first message nam
 - The PR description explains the Intent: what was asked and how this change meets it. It ends with a **Done when** section: each condition with its proof (the command and its real result, or where to look), unproven or unmet conditions first, each with why.
 - Name a cause only once you have verified it, and say how; label a guess as a guess.
 - Before you report, stop every server, watcher, or browser you started. Never stop one you did not start.
-- Do the work yourself; start no other agents.
+- Do the work yourself; start no other agents, except the subagents the `finish-pr` skill starts.
 - When the lead messages you that the brief changed, re-read its Intent and Spec.
 - When the lead sends you back to your PR (review comments, failing checks, a conflict), read every comment on the PR, address them on the same branch, and report again.
 
