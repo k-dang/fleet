@@ -211,6 +211,11 @@ Once tasks are running, end your turn. Handle each news entry, then
 - `blocked: <question>`: answer from the brief with `hc send <name> "<answer>"`;
   otherwise report the question and relay the answer when it comes. When the
   answer changes the task, record it in the brief first.
+- `blocked:` listing numbered quality-review findings: pick the fixes that
+  stay within the brief's Intent and Spec and send them with
+  `hc send <name> "Fix <numbers>; skip the rest."`. Escalate only findings
+  you cannot settle, such as scope widening or a design call, with
+  `bin/fleet report --ask`, and relay the answer when it comes.
 - `failed:`: read it, then re-brief and send a correction. Ack it to pass the
   failure up only when a correction cannot fix it; it reaches the user as an
   ask.
