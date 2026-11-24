@@ -242,8 +242,8 @@ A worker's report is a claim. Check the evidence before you ack it:
 - implement: read the diff (`git -C <worktree> diff <base>...HEAD`, both named
   in the brief's Fleet section), confirm it stays within the Intent and Spec,
   and check the PR's CI (`gh pr checks <url>`). Then check each Done when
-  condition yourself against the diff, CI, and your own reruns. The evidence
-  in the PR description supports this but does not replace it.
+  condition yourself against the diff and CI. The evidence in the PR
+  description supports this but does not replace it.
 - investigate: read the report file in full; spot-check its cited evidence.
 
 Measure against Done when. A condition you could not confirm falls short. When it
