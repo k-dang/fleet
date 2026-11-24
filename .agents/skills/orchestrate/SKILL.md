@@ -241,16 +241,17 @@ A worker's report is a claim. Check the evidence before you ack it:
 
 - implement: read the diff (`git -C <worktree> diff <base>...HEAD`, both named
   in the brief's Fleet section), confirm it stays within the Intent and Spec,
-  and check the PR's CI (`gh pr checks <url>`). Read the evidence in the PR
-  description and check it against the diff; rerun any you doubt.
+  and check the PR's CI (`gh pr checks <url>`). Then check each Done when
+  condition yourself against the diff, CI, and your own reruns. The evidence
+  in the PR description supports this but does not replace it.
 - investigate: read the report file in full; spot-check its cited evidence.
 
-Measure against Done when. A condition without proof falls short. When it
+Measure against Done when. A condition you could not confirm falls short. When it
 falls short and the worker can close the gap, send the specific gap with
 `hc send <name> "<what is missing>"`, ack, and return to 3. When it holds, or
 only the user can settle what is left, ack it so fleet passes it up, and
-report anything the user should weigh with it: every condition still
-unproven, and any risk.
+report anything the user should weigh with it: every condition you could
+not confirm, and any risk.
 
 ### 5. Land
 
