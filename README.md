@@ -45,8 +45,9 @@ projects. Each task runs in one of its project's repos, named when it is
 spawned if the project has several, and fleet records which.
 
 Each task is a folder in `~/.fleet/tasks/<name>/`: the brief its project lead wrote,
-fleet's record of the task, and an append-only status file the worker writes
-`done:`, `blocked:`, or `failed:` lines to. A project lead is a task too,
+fleet's record of the task, an append-only status file the worker writes
+`done:`, `blocked:`, or `failed:` lines to, and for an implement task the proof
+file where its worker proves each Done when condition. A project lead is a task too,
 `lead-<project>`, whose status file is what the orchestrator hears. Every
 agent runs in its own hc terminal that outlives whoever started it (hc records
 the starter as its parent, which is how Herdr nests the agents list), so closing
