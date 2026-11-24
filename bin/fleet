@@ -5,11 +5,10 @@
 #
 # Every task is a folder under $FLEET_HOME/tasks/<name>/ holding brief.md (the
 # project lead's instructions), meta (what this script recorded), status (lines
-# the agent appends, plus the PR watch's lines; see watch_prs), proof.md (an
-# implement worker's proof of each Done when condition), and sent (news a
-# session's hook delivered and that session has not acked yet). A project lead is itself a task, lead-<project>,
-# whose status lines are its reports and its workers' outcomes, for the
-# orchestrator. README.md explains the design; `fleet help` lists commands.
+# the agent appends, plus the PR watch's lines; see watch_prs), and sent (news
+# a session's hook delivered and that session has not acked yet). A project
+# lead is itself a task, lead-<project>, whose status lines are its reports and
+# its workers' outcomes, for the orchestrator. README.md explains the design; `fleet help` lists commands.
 set -euo pipefail
 
 die() { echo "fleet: $*" >&2; exit 1; }
@@ -379,8 +378,8 @@ cmd_spawn() {
     printf '\n## Fleet\n- Role: %s; its instructions are in %s (skip the frontmatter)\n- Status file: %s\n' \
       "$role" "$FLEET_ROOT/herdr-core/templates/$template.md" "$dir/status"
     if [ "$role" = implement ]; then
-      printf -- '- Worktree: %s (branch %s, based on %s)\n- Proof file: %s\n' \
-        "$cwd" "$branch" "$base" "$dir/proof.md"
+      printf -- '- Worktree: %s (branch %s, based on %s)\n' \
+        "$cwd" "$branch" "$base"
     else
       printf -- '- Repository (read-only): %s\n- Report file: %s\n' "$cwd" "$report"
     fi
