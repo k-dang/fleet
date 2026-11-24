@@ -246,12 +246,12 @@ A worker's report is a claim. Check the evidence before you ack it:
   description supports this but does not replace it.
 - investigate: read the report file in full; spot-check its cited evidence.
 
-Measure against Done when. A condition you could not confirm falls short. When it
-falls short and the worker can close the gap, send the specific gap with
-`hc send <name> "<what is missing>"`, ack, and return to 3. When it holds, or
-only the user can settle what is left, ack it so fleet passes it up, and
-report anything the user should weigh with it: every condition you could
-not confirm, and any risk.
+Measure against Done when. A condition you could not confirm falls short.
+When it falls short and the worker can close the gap, send the specific gap
+with `hc send <name> "<what is missing>"`, ack, and return to 3. When it holds,
+or only the user can settle what is left, ack it so fleet passes it up, and
+report anything the user should weigh with it: every condition you could not
+confirm, and any risk.
 
 ### 5. Land
 
